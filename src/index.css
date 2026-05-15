@@ -30,3 +30,47 @@
     scrollbar-width: none;
   }
 }
+
+/* Print portal is hidden on screen; only rendered for print. */
+.print-portal {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Hide the live app; show only the clean printable layout. */
+  body > #root {
+    display: none !important;
+  }
+
+  .print-portal {
+    display: block !important;
+    color: #000;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .print-portal table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .print-portal thead {
+    display: table-header-group;
+  }
+
+  .print-portal tr {
+    break-inside: avoid;
+  }
+}

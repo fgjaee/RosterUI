@@ -14,7 +14,6 @@ export interface AppData {
 }
 
 const COLLECTION_NAME = 'appData';
-const GLOBAL_EMPLOYEES_COLLECTION = 'globalEmployees';
 
 export async function saveAppState(department: string, weekId: string, data: Omit<AppData, 'lastUpdated' | 'department'>) {
   try {

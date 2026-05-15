@@ -17,7 +17,7 @@ export function LoginScreen() {
     try {
       const email = username.includes('@') ? username : `${username}@rosterui.internal`;
       await signInWithEmailAndPassword(auth, email, password);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Login failed:", err);
       setError("Invalid username or password. Please try again.");
     } finally {

@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Card, CardContent, AppButton, AppInput, AppSelect } from './ui';
+import { CompactRosterPanels, PrintableRoster } from './RosterPanels';
 import { DashboardSummary } from './DashboardSummary';
 import type {
   Role, EmploymentStatus, RosterStatus, TeamMember, Target,
@@ -8,15 +10,21 @@ import type {
 } from '../types';
 import {
   days, parseShift, roleFor, formatHours, formatTimeText,
-  createTeamMember, emptyShifts, formatDate, getSunday,
-  addDays, defaultTruckForDate, defaultOpenNeededForDate,
-  defaultOvernightNeededForNight, applyOvernightFromMorningTrucks,
+  createTeamMember, emptyShifts, defaultTruckForDate,
+  applyOvernightFromMorningTrucks,
   defaultShiftDefinitions, toNumber, checkAvailabilityViolation,
-  checkSixthDayViolation
+  checkSixthDayViolation, roleLabel, cellClass
 } from '../lib/helpers';
 
 // OCR via CDN (loaded in index.html)
-declare const Tesseract: any;
+interface TesseractGlobal {
+  recognize: (
+    image: File | string,
+    lang: string,
+    options?: { logger?: (m: unknown) => void }
+  ) => Promise<{ data: { text: string } }>;
+}
+declare const Tesseract: TesseractGlobal | undefined;
     
 
 
@@ -84,10 +92,41 @@ export function EditableRosterStaffingView({
   onGlobalEmployeesChange,
 }: EditableRosterStaffingViewProps) {
   const [showShiftRulesSettings, setShowShiftRulesSettings] = useState(false);
-  const [_showUnsafeCuts, _setShowUnsafeCuts] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [showAddMemberPicker, setShowAddMemberPicker] = useState(false);
   const [addMemberSearch, setAddMemberSearch] = useState('');
+
+  // Mobile / fold-friendly compact layout. Auto-tracks viewport width
+  // (cover screen vs unfolded inner screen) until the user manually overrides.
+  const compactQuery = '(max-width: 1024px)';
+  const [compact, setCompact] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(compactQuery).matches
+  );
+  const compactOverridden = useRef(false);
+
+  useEffect(() => {
+    const mql = window.matchMedia(compactQuery);
+    const onChange = (e: MediaQueryListEvent) => {
+      if (!compactOverridden.current) setCompact(e.matches);
+    };
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
+
+  // Print: render a clean read-only layout into a body-level portal, then
+  // trigger the browser print dialog (which doubles as "Save as PDF").
+  const [printMode, setPrintMode] = useState<null | 'schedule' | 'availability'>(null);
+
+  useEffect(() => {
+    if (!printMode) return;
+    const done = () => setPrintMode(null);
+    window.addEventListener('afterprint', done);
+    const timer = window.setTimeout(() => window.print(), 80);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('afterprint', done);
+    };
+  }, [printMode]);
 
   const summary = useMemo<SummaryRow[]>(() => days.map((day, dayIndex) => {
     let open = 0;
@@ -374,7 +413,7 @@ export function EditableRosterStaffingView({
     });
 
     return daily.filter(d => d.candidates.length > 0 || d.additions.length > 0);
-  }, [roster, summary, targets, minimumShiftLength, autoDeductLunch, shiftDefinitions]);
+  }, [roster, displayedRoster, summary, targets, minimumShiftLength, autoDeductLunch, shiftDefinitions]);
 
   const safeReductionTotal = useMemo(() => {
     return dailyReductions.reduce((total, day) => total + day.safeHours, 0);
@@ -529,7 +568,7 @@ export function EditableRosterStaffingView({
         } else {
           alert("Invalid file format.");
         }
-      } catch (err) {
+      } catch {
         alert("Error parsing the file.");
       }
     };
@@ -708,6 +747,23 @@ export function EditableRosterStaffingView({
             <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant">Weekly labor budget, coverage rules, and delivery schedules are validated together.</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <AppButton
+              onClick={() => { compactOverridden.current = true; setCompact(v => !v); }}
+              className="rounded-lg border border-outline-variant hover:bg-surface-container-low"
+              variant="ghost"
+              title={compact ? 'Switch to full table view' : 'Switch to compact mobile view'}
+            >
+              <span className="material-symbols-outlined text-[16px] mr-1.5">{compact ? 'table_rows' : 'smartphone'}</span>
+              {compact ? 'Full View' : 'Compact'}
+            </AppButton>
+            <AppButton onClick={() => setPrintMode('schedule')} className="rounded-lg border border-outline-variant hover:bg-surface-container-low" variant="ghost">
+              <span className="material-symbols-outlined text-[16px] mr-1.5">print</span>
+              Print Schedule
+            </AppButton>
+            <AppButton onClick={() => setPrintMode('availability')} className="rounded-lg border border-outline-variant hover:bg-surface-container-low" variant="ghost">
+              <span className="material-symbols-outlined text-[16px] mr-1.5">print</span>
+              Print Availability
+            </AppButton>
             <AppButton onClick={handleSaveToFile} className="rounded-lg border border-outline-variant hover:bg-surface-container-low" variant="ghost">
               <span className="material-symbols-outlined text-[16px] mr-1.5">download</span>
               Save
@@ -1122,8 +1178,14 @@ export function EditableRosterStaffingView({
                               <span className={`text-2xl font-black font-data-tabular tracking-tighter transition-colors duration-500 ${hrs >= 40 ? 'text-primary' : hrs > 0 ? 'text-on-surface' : 'text-on-surface-variant/30'}`}>
                                 {formatHours(hrs)}
                               </span>
-                              : hrs === 40 
-                                ? 'bg-status-opener-bg text-status-opener-text border-status-opener-text/20' 
+                              <span className="text-[11px] font-bold text-on-surface-variant/40">h</span>
+                            </div>
+                          </div>
+                          <div
+                            className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors duration-500 ${hrs > 40
+                              ? 'bg-error-container text-on-error-container border-error/20'
+                              : hrs === 40
+                                ? 'bg-status-opener-bg text-status-opener-text border-status-opener-text/20'
                                 : 'bg-surface-container-high text-on-surface-variant border-outline-variant/20'
                             }`}
                           >
@@ -1163,6 +1225,21 @@ export function EditableRosterStaffingView({
           </Card>
         </div>
 
+        {compact ? (
+          <CompactRosterPanels
+            roster={roster}
+            targets={targets}
+            summary={summary}
+            shiftDefinitions={shiftDefinitions}
+            onUpdateShift={updateShift}
+            onUpdateUnavailable={updateUnavailable}
+            onUpdateName={updateName}
+            onUpdateStatus={updateStatus}
+            onUpdateRosterStatus={updateRosterStatus}
+            onRemovePerson={removePerson}
+          />
+        ) : (
+        <>
         <Card className="rounded-xl shadow-sm border-outline-variant">
           <CardContent className="overflow-x-auto p-3">
             <table className="w-full min-w-[1450px] border-collapse text-sm">
@@ -1355,6 +1432,8 @@ export function EditableRosterStaffingView({
             </table>
           </CardContent>
         </Card>
+        </>
+        )}
 
         <Card className="rounded-xl shadow-sm border-outline-variant">
           <CardContent className="overflow-x-auto p-4">
@@ -1466,6 +1545,19 @@ export function EditableRosterStaffingView({
           </CardContent>
         </Card>
       </div>
+
+      {printMode && createPortal(
+        <div className="print-portal">
+          <PrintableRoster
+            mode={printMode}
+            roster={roster}
+            targets={targets}
+            shiftDefinitions={shiftDefinitions}
+            department={department}
+          />
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

@@ -36,7 +36,7 @@ export function LaborBudgetView({
           <p className="font-body-md text-body-md text-on-surface-variant mt-1">Budget configuration and weekly allocation overview for {department}.</p>
         </div>
         <AppButton 
-          variant={isEditing ? "tonal" : "outline"} 
+          variant={isEditing ? "tonal" : "ghost"}
           onClick={handleToggleEdit}
           className="rounded-xl"
         >

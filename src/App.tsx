@@ -17,7 +17,7 @@ import type { AuditEntry } from './components/views/AuditLogView'
 import { TeamInfoView } from './components/views/TeamInfoView'
 import type { TeamMember, Target, SummaryRow } from './types'
 import {
-  days, parseShift, roleFor, defaultRoster, defaultTargets,
+  days, parseShift, roleFor, defaultRoster,
   defaultShiftDefinitions, toNumber, createDefaultTargets, emptyShifts,
   getSunday, formatDate
 } from './lib/helpers'
