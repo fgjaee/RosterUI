@@ -706,7 +706,12 @@ export function EditableRosterStaffingView({
       
       if (parsedMembers.length > 0) {
         if (confirm(`Found ${parsedMembers.length} team members from image. Append to current roster?`)) {
+           parsedMembers.forEach(m => { m.primaryDepartment = department; });
            onRosterChange([...roster, ...parsedMembers]);
+           // Persist new people to the global team pool so they carry week to week.
+           const existingIds = new Set(globalEmployees.map(e => e.id));
+           const newGlobals = parsedMembers.filter(m => !existingIds.has(m.id));
+           if (newGlobals.length > 0) onGlobalEmployeesChange([...globalEmployees, ...newGlobals]);
         }
       } else {
         alert("Could not detect any clear schedule rows in the image. Please try a clearer image or a different format.");
