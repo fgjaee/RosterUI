@@ -19,7 +19,7 @@ import type { TeamMember, Target, SummaryRow } from './types'
 import {
   days, parseShift, roleFor, defaultRoster,
   defaultShiftDefinitions, toNumber, createDefaultTargets, emptyShifts,
-  getSunday, formatDate
+  getSunday, formatDate, compareSeniority
 } from './lib/helpers'
 import type { ShiftDefinitions } from './types'
 import { 
@@ -147,6 +147,7 @@ function App() {
 
   const [isSaving, setIsSaving] = useState(false)
   const [isInitialLoading, setIsInitialLoading] = useState(true)
+  const [lastSaved, setLastSaved] = useState<Date | null>(null)
 
   // Load data when user, week, or department changes
   useEffect(() => {
@@ -216,7 +217,7 @@ function App() {
             }
           })
 
-        const finalRoster = [...deptMembers, ...borrowedMembers]
+        const finalRoster = [...deptMembers, ...borrowedMembers].sort(compareSeniority)
         setRoster(finalRoster)
 
         // Promote any roster member missing from the global pool so the whole
@@ -274,10 +275,64 @@ function App() {
       // Save global employee pool
       await saveGlobalEmployees(globalEmployees)
       setIsSaving(false)
+      setLastSaved(new Date())
     }, 2000)
 
     return () => clearTimeout(timer)
   }, [roster, targets, weeklyHoursAvailable, minimumShiftLength, autoDeductLunch, currentDepartment, currentWeekId, shiftDefinitions, user, isInitialLoading, globalEmployees])
+
+  // Keep the weekly roster in sync with profile edits made on the Employees
+  // page (names, status, role, seniority, availability, etc.) without
+  // disturbing week-specific shifts.
+  useEffect(() => {
+    if (isInitialLoading) return
+    // Intentional guarded reconciliation: profile edits live on the global
+    // pool and must flow into the active week's roster without touching
+    // week-specific shifts. The updater returns `prev` unchanged when
+    // nothing differs, so this does not cascade renders.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRoster(prev => {
+      const byId = new Map(globalEmployees.map(g => [g.id, g]))
+      let changed = false
+      let nextRoster = prev.map(r => {
+        const g = byId.get(r.id)
+        if (!g) return r
+        const merged = { ...g, shifts: r.shifts, isBorrowed: r.isBorrowed }
+        const fieldsDiffer =
+          merged.name !== r.name || merged.status !== r.status || merged.role !== r.role ||
+          merged.jobTitle !== r.jobTitle || merged.seniorityDate !== r.seniorityDate ||
+          merged.isTeamLeader !== r.isTeamLeader || merged.birthday !== r.birthday ||
+          merged.primaryDepartment !== r.primaryDepartment || merged.rosterStatus !== r.rosterStatus ||
+          merged.scheduleLocked !== r.scheduleLocked ||
+          JSON.stringify(merged.unavailable) !== JSON.stringify(r.unavailable) ||
+          JSON.stringify(merged.preferredDaysOff) !== JSON.stringify(r.preferredDaysOff) ||
+          JSON.stringify(merged.timeOff) !== JSON.stringify(r.timeOff)
+        if (fieldsDiffer) { changed = true; return merged }
+        return r
+      })
+      const beforeLen = nextRoster.length
+      nextRoster = nextRoster.filter(r => byId.has(r.id) || r.isBorrowed)
+      if (nextRoster.length !== beforeLen) changed = true
+      const present = new Set(nextRoster.map(r => r.id))
+      const additions = globalEmployees
+        .filter(g => !present.has(g.id) && g.primaryDepartment === currentDepartment && g.rosterStatus !== 'Inactive')
+        .map(g => ({ ...g, shifts: emptyShifts(), isBorrowed: false }))
+      if (additions.length) { nextRoster = [...nextRoster, ...additions]; changed = true }
+      if (!changed) return prev
+      return [...nextRoster].sort(compareSeniority)
+    })
+  }, [globalEmployees, currentDepartment, isInitialLoading])
+
+  const forceSave = useCallback(async () => {
+    if (!user) return
+    setIsSaving(true)
+    await saveAppState(currentDepartment, currentWeekId, {
+      roster, targets, weeklyHoursAvailable, minimumShiftLength, autoDeductLunch, shiftDefinitions
+    })
+    await saveGlobalEmployees(globalEmployees)
+    setIsSaving(false)
+    setLastSaved(new Date())
+  }, [user, currentDepartment, currentWeekId, roster, targets, weeklyHoursAvailable, minimumShiftLength, autoDeductLunch, shiftDefinitions, globalEmployees])
 
   const handleSignOut = useCallback(async () => {
     try {
@@ -300,7 +355,7 @@ function App() {
       <div className="flex items-center justify-center h-screen bg-background">
         <div className="flex flex-col items-center gap-4">
           <div className="h-12 w-12 animate-spin rounded-full border-4 border-surface-container-high border-t-primary"></div>
-          <div className="font-headline-md text-headline-md text-on-surface-variant">Loading Smart Roster Planner...</div>
+          <div className="font-headline-md text-headline-md text-on-surface-variant">Loading Scheduler...</div>
         </div>
       </div>
     )
@@ -326,6 +381,8 @@ function App() {
             shiftDefinitions={shiftDefinitions}
             isLoading={isInitialLoading}
             isSaving={isSaving}
+            lastSaved={lastSaved}
+            onForceSave={forceSave}
             onRosterChange={setRoster}
             onGlobalEmployeesChange={setGlobalEmployees}
             onTargetsChange={setTargets}

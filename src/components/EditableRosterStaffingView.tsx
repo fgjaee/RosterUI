@@ -4,7 +4,7 @@ import { Card, CardContent, AppButton, AppInput, AppSelect } from './ui';
 import { CompactRosterPanels, PrintableRoster } from './RosterPanels';
 import { DashboardSummary } from './DashboardSummary';
 import { reviseSchedule, type RevisionResult, type ScheduleChange } from '../lib/optimizer';
-import { importScheduleFile } from '../lib/scheduleImport';
+import { importScheduleFile, importAvailabilityFile } from '../lib/scheduleImport';
 import type {
   Role, EmploymentStatus, RosterStatus, TeamMember, Target,
   SummaryRow, DailyReduction,
@@ -51,6 +51,8 @@ interface EditableRosterStaffingViewProps {
   shiftDefinitions: ShiftDefinitions;
   isLoading: boolean;
   isSaving: boolean;
+  lastSaved?: Date | null;
+  onForceSave?: () => Promise<void> | void;
   onRosterChange: (roster: TeamMember[]) => void;
   onTargetsChange: (targets: Target[]) => void;
   onWeeklyHoursChange: (v: string) => void;
@@ -73,6 +75,8 @@ export function EditableRosterStaffingView({
   shiftDefinitions,
   isLoading,
   isSaving,
+  lastSaved,
+  onForceSave,
   onRosterChange,
   onTargetsChange,
   onWeeklyHoursChange,
@@ -729,6 +733,53 @@ export function EditableRosterStaffingView({
     }
   }
 
+  async function handleAvailabilityImport(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setOcrLoading(true);
+    try {
+      const { rows, warnings, source } = await importAvailabilityFile(file);
+      if (rows.length === 0) {
+        alert(
+          'No availability rows could be read.\n\n' +
+          (warnings.join('\n') || 'Use a sheet with a Sun–Sat header and one person per row.')
+        );
+        return;
+      }
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
+      const byName = new Map<string, TeamMember>();
+      [...globalEmployees, ...roster].forEach(m => { if (m.name) byName.set(norm(m.name), m); });
+
+      let matched = 0;
+      const unmatched: string[] = [];
+      const patch = new Map<string, string[]>(); // id -> availability[7]
+      rows.forEach(r => {
+        const ex = byName.get(norm(r.name));
+        if (ex) { matched++; patch.set(ex.id, r.availability); }
+        else unmatched.push(r.name);
+      });
+
+      const summary =
+        `Imported via ${source === 'pdf-text' ? 'PDF text layer' : 'OCR'}.\n\n` +
+        `${rows.length} row(s) read — ${matched} matched to team members.` +
+        (unmatched.length ? `\n\nNot matched (add them first): ${unmatched.slice(0, 10).join(', ')}` : '') +
+        (warnings.length ? `\n\nNotes:\n${warnings.join('\n')}` : '') +
+        `\n\nApply these as standing availability rules?`;
+      if (!confirm(summary)) return;
+
+      const applyAvail = (m: TeamMember): TeamMember =>
+        patch.has(m.id) ? { ...m, unavailable: patch.get(m.id)! } : m;
+      onRosterChange(roster.map(applyAvail));
+      onGlobalEmployeesChange(globalEmployees.map(applyAvail));
+    } catch (err) {
+      console.error(err);
+      alert(`Could not import this file.\n\n${err instanceof Error ? err.message : 'Unknown error.'}`);
+    } finally {
+      setOcrLoading(false);
+      event.target.value = '';
+    }
+  }
+
   function weeklyHoursFor(id: string): number {
     return personHours.find((person) => person.id === id)?.hours || 0;
   }
@@ -865,9 +916,22 @@ export function EditableRosterStaffingView({
               <span className="material-symbols-outlined text-[16px] mr-1.5">event_repeat</span>
               Apply Patterns{lockedCount > 0 ? ` (${lockedCount})` : ''}
             </AppButton>
-            <AppButton onClick={handleSaveToFile} className="rounded-lg border border-outline-variant hover:bg-surface-container-low" variant="ghost">
+            <AppButton
+              onClick={() => onForceSave?.()}
+              disabled={isSaving || !onForceSave}
+              title="Save everything to the cloud now"
+              className="rounded-lg border border-primary-fixed text-primary bg-primary-fixed/30 hover:bg-primary-fixed/50 disabled:opacity-50"
+              variant="ghost"
+            >
+              <span className="material-symbols-outlined text-[16px] mr-1.5">{isSaving ? 'cloud_sync' : 'cloud_upload'}</span>
+              {isSaving ? 'Saving…' : 'Save to Cloud'}
+            </AppButton>
+            <span className="self-center text-label-bold text-on-surface-variant whitespace-nowrap">
+              {isSaving ? 'Saving…' : lastSaved ? `Saved ${lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Autosaves every few seconds'}
+            </span>
+            <AppButton onClick={handleSaveToFile} className="rounded-lg border border-outline-variant hover:bg-surface-container-low" variant="ghost" title="Download a local JSON backup">
               <span className="material-symbols-outlined text-[16px] mr-1.5">download</span>
-              Save
+              Download Backup
             </AppButton>
             <div>
               <input type="file" id="file-upload" accept=".json" className="hidden" onChange={handleLoadFromFile} />
@@ -881,6 +945,13 @@ export function EditableRosterStaffingView({
               <AppButton onClick={() => document.getElementById('ocr-upload')?.click()} className="rounded-lg border border-primary-fixed text-primary bg-primary-fixed/30 hover:bg-primary-fixed/50 disabled:opacity-50" variant="ghost" disabled={ocrLoading} title="Import a Kronos Wall Schedule (PDF or image)">
                 <span className="material-symbols-outlined text-[16px] mr-1.5">{ocrLoading ? 'hourglass_top' : 'upload_file'}</span>
                 {ocrLoading ? "Importing…" : "Import Schedule"}
+              </AppButton>
+            </div>
+            <div>
+              <input type="file" id="avail-upload" accept="image/*,application/pdf,.pdf" className="hidden" onChange={handleAvailabilityImport} disabled={ocrLoading} />
+              <AppButton onClick={() => document.getElementById('avail-upload')?.click()} className="rounded-lg border border-primary-fixed text-primary bg-primary-fixed/30 hover:bg-primary-fixed/50 disabled:opacity-50" variant="ghost" disabled={ocrLoading} title="Import an availability sheet (PDF or image)">
+                <span className="material-symbols-outlined text-[16px] mr-1.5">{ocrLoading ? 'hourglass_top' : 'event_available'}</span>
+                {ocrLoading ? "Importing…" : "Import Availability"}
               </AppButton>
             </div>
             <AppButton onClick={() => setShowAddMemberPicker(!showAddMemberPicker)} className="rounded-lg bg-primary text-on-primary hover:opacity-90">
@@ -1671,7 +1742,7 @@ export function EditableRosterStaffingView({
           <CardContent className="p-4">
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
               <div>
-                <h2 className="text-headline-md text-on-surface">Smart Schedule Revision</h2>
+                <h2 className="text-headline-md text-on-surface">Auto Schedule</h2>
                 <p className="text-body-md text-on-surface-variant">
                   Auto-revises the schedule to hit coverage minimums and the weekly labor budget. Full-timers and locked recurring schedules are never trimmed &mdash; cuts come from part-timers, least senior first, and coverage gaps go to the most senior available part-timer. Review each change before applying.
                 </p>
