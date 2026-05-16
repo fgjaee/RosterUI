@@ -6,11 +6,15 @@ import { Card, CardContent } from '../ui';
 interface EmployeesViewProps {
   roster: TeamMember[]; // This will be the global pool
   autoDeductLunch: boolean;
+  onRosterChange?: (next: TeamMember[]) => void;
 }
 
-type SortKey = 'name' | 'status' | 'rosterStatus' | 'weeklyHours' | 'primaryDepartment';
+type SortKey = 'name' | 'status' | 'rosterStatus' | 'weeklyHours' | 'primaryDepartment' | 'seniority';
 
-export function EmployeesView({ roster, autoDeductLunch }: EmployeesViewProps) {
+export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: EmployeesViewProps) {
+  function patchMember(id: string, patch: Partial<TeamMember>) {
+    onRosterChange?.(roster.map(p => (p.id === id ? { ...p, ...patch } : p)));
+  }
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortAsc, setSortAsc] = useState(true);
@@ -43,6 +47,12 @@ export function EmployeesView({ roster, autoDeductLunch }: EmployeesViewProps) {
       else if (sortKey === 'rosterStatus') cmp = a.rosterStatus.localeCompare(b.rosterStatus);
       else if (sortKey === 'weeklyHours') cmp = a.weeklyHours - b.weeklyHours;
       else if (sortKey === 'primaryDepartment') cmp = (a.primaryDepartment || '').localeCompare(b.primaryDepartment || '');
+      else if (sortKey === 'seniority') {
+        // Most senior first = earliest date. Missing dates sort last.
+        const da = a.seniorityDate || '9999-12-31';
+        const db = b.seniorityDate || '9999-12-31';
+        cmp = da.localeCompare(db);
+      }
       return sortAsc ? cmp : -cmp;
     });
 
@@ -146,6 +156,8 @@ export function EmployeesView({ roster, autoDeductLunch }: EmployeesViewProps) {
                   { key: 'primaryDepartment', label: 'Department' },
                   { key: 'rosterStatus', label: 'Roster' },
                   { key: null, label: 'Coverage' },
+                  { key: 'seniority', label: 'Seniority' },
+                  { key: null, label: 'Leader' },
                   { key: 'weeklyHours', label: 'Weekly Hrs' },
                 ] as { key: SortKey | null; label: string }[]).map(({ key, label }) => (
                   <th
@@ -161,7 +173,7 @@ export function EmployeesView({ roster, autoDeductLunch }: EmployeesViewProps) {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-on-surface-variant">No employees match your filters.</td>
+                  <td colSpan={8} className="p-8 text-center text-on-surface-variant">No employees match your filters.</td>
                 </tr>
               ) : filtered.map((p, i) => (
                 <tr
@@ -190,6 +202,27 @@ export function EmployeesView({ roster, autoDeductLunch }: EmployeesViewProps) {
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-label-bold ${p.coverageStatus === 'Excluded' ? 'bg-surface-container text-on-surface-variant' : 'bg-status-opener-bg text-status-opener-text'}`}>
                       {p.coverageStatus ?? 'Included'}
                     </span>
+                  </td>
+                  <td className="p-3">
+                    <input
+                      type="date"
+                      value={p.seniorityDate || ''}
+                      onChange={e => patchMember(p.id, { seniorityDate: e.target.value || undefined })}
+                      disabled={!onRosterChange}
+                      className="bg-surface-container-low border border-outline-variant/30 rounded-md px-2 py-1 text-body-sm text-on-surface focus:ring-2 focus:ring-primary/20 focus:border-primary/50 outline-none disabled:opacity-60"
+                    />
+                  </td>
+                  <td className="p-3">
+                    <button
+                      type="button"
+                      onClick={() => onRosterChange && patchMember(p.id, { isTeamLeader: !p.isTeamLeader })}
+                      disabled={!onRosterChange}
+                      title={p.isTeamLeader ? 'Team leader (seniority not used for cuts)' : 'Mark as team leader'}
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-label-bold transition-colors ${p.isTeamLeader ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'}`}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">{p.isTeamLeader ? 'star' : 'star_outline'}</span>
+                      {p.isTeamLeader ? 'Leader' : '—'}
+                    </button>
                   </td>
                   <td className="p-3 font-data-tabular tabular-nums font-bold text-on-surface">
                     {p.weeklyHours > 0 ? `${p.weeklyHours.toFixed(1)}h` : <span className="text-on-surface-variant font-normal">—</span>}

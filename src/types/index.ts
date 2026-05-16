@@ -16,6 +16,8 @@ export type TeamMember = {
   isBorrowed?: boolean;
   scheduleLocked?: boolean;
   fixedSchedule?: string[];
+  seniorityDate?: string;
+  isTeamLeader?: boolean;
 };
 
 export type WeekConfig = {

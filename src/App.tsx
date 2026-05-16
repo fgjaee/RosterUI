@@ -320,7 +320,7 @@ function App() {
       case 'labor':
         return <LaborView {...sharedProps} weeklyHoursAvailable={weeklyHoursAvailable} autoDeductLunch={autoDeductLunch} />
       case 'employees':
-        return <EmployeesView roster={globalEmployees} autoDeductLunch={autoDeductLunch} />
+        return <EmployeesView roster={globalEmployees} autoDeductLunch={autoDeductLunch} onRosterChange={setGlobalEmployees} />
       case 'compliance':
         return <ComplianceView {...sharedProps} />
       case 'violations':

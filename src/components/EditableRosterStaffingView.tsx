@@ -1394,6 +1394,16 @@ export function EditableRosterStaffingView({
                             </>
                           )}
                         </div>
+                        <div className="text-[10px] leading-tight text-on-surface-variant" title="Edit seniority and team leader on the Employees page">
+                          {person.isTeamLeader ? (
+                            <span className="font-semibold text-primary">★ Team Leader</span>
+                          ) : (
+                            <>
+                              {person.status}
+                              {person.seniorityDate ? ` · Sr ${person.seniorityDate}` : ' · Sr —'}
+                            </>
+                          )}
+                        </div>
                       </div>
                     </td>
                     {days.map((day, dayIndex) => {
@@ -1655,7 +1665,7 @@ export function EditableRosterStaffingView({
               <div>
                 <h2 className="text-headline-md text-on-surface">Smart Schedule Revision</h2>
                 <p className="text-body-md text-on-surface-variant">
-                  Auto-revises the schedule to hit coverage minimums and the weekly labor budget. Only adjusts flexible staff &mdash; team members with a locked recurring schedule are never changed. Review each change before applying.
+                  Auto-revises the schedule to hit coverage minimums and the weekly labor budget. Full-timers and locked recurring schedules are never trimmed &mdash; cuts come from part-timers, least senior first, and coverage gaps go to the most senior available part-timer. Review each change before applying.
                 </p>
               </div>
               <div className="flex gap-2">
@@ -1731,6 +1741,9 @@ export function EditableRosterStaffingView({
               <li>Starting with the week of 2026-05-17, daily truck delivery is assumed and Wednesday night overnight becomes required again.</li>
               <li>Team members with Coverage set to "Excluded" are not counted in the opener, closer, or overnight coverage rules.</li>
               <li>Inactive team members are kept on the roster but excluded from scheduled hours and coverage counts.</li>
+              <li>Smart Revision never trims full-timers or locked recurring schedules; labor cuts come from part-timers, least senior first.</li>
+              <li>Smart Revision fills coverage gaps with the most senior available part-timer, avoiding pushing a part-timer above the lowest-seniority full-timer's weekly hours.</li>
+              <li>The team leader's seniority date is not used when ranking who is cut or who gains hours.</li>
             </ul>
           </CardContent>
         </Card>
