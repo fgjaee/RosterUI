@@ -17,6 +17,13 @@
 
     <!-- Tesseract.js OCR Engine (CDN) -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
+
+    <!-- PDF.js for PDF schedule import (CDN) -->
+    <script type="module">
+      import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
+      window.pdfjsLib = pdfjsLib;
+    </script>
   </head>
   <body class="bg-background text-on-background font-body-md">
     <div id="root"></div>

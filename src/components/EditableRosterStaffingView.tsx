@@ -4,6 +4,7 @@ import { Card, CardContent, AppButton, AppInput, AppSelect } from './ui';
 import { CompactRosterPanels, PrintableRoster } from './RosterPanels';
 import { DashboardSummary } from './DashboardSummary';
 import { reviseSchedule, type RevisionResult, type ScheduleChange } from '../lib/optimizer';
+import { importScheduleFile } from '../lib/scheduleImport';
 import type {
   Role, EmploymentStatus, RosterStatus, TeamMember, Target,
   SummaryRow, DailyReduction,
@@ -17,16 +18,6 @@ import {
   checkSixthDayViolation, roleLabel, cellClass
 } from '../lib/helpers';
 
-// OCR via CDN (loaded in index.html)
-interface TesseractGlobal {
-  recognize: (
-    image: File | string,
-    lang: string,
-    options?: { logger?: (m: unknown) => void }
-  ) => Promise<{ data: { text: string } }>;
-}
-declare const Tesseract: TesseractGlobal | undefined;
-    
 
 
 
@@ -671,63 +662,67 @@ export function EditableRosterStaffingView({
     const file = event.target.files?.[0];
     if (!file) return;
 
-    if (typeof Tesseract === "undefined") {
-      alert("OCR engine (Tesseract.js) is not loaded. Please ensure you are connected to the internet.");
-      return;
-    }
-
     setOcrLoading(true);
     try {
-      const { data: { text } } = await Tesseract.recognize(file, 'eng', {
-        logger: (m: unknown) => console.log(m)
-      });
-      
-      console.log("Raw OCR Result:", text);
-      
-      const lines = text.split('\n').map((l: string) => l.trim()).filter((l: string) => l.length > 0);
-      const shiftRegex = /(\d{1,2}(?::\d{2})?[a|p|A|P]?[m|M]?\s*-\s*\d{1,2}(?::\d{2})?[a|p|A|P]?[m|M]?)|(OFF|Off|off|REQ|Req)/g;
-      
-      const parsedMembers: TeamMember[] = [];
-      
-      for (const line of lines) {
-        const shiftsFound = (Array.from(line.matchAll(shiftRegex)) as RegExpMatchArray[]).map(m => m[0] as string);
-        
-        if (shiftsFound.length > 0) {
-           const possibleName = line.replace(shiftRegex, '').replace(/[^a-zA-Z\s]/g, '').trim();
-           if (possibleName && possibleName.split(' ').length <= 4) {
-              const currentMember = createTeamMember(parsedMembers.length + roster.length);
-              currentMember.name = possibleName;
-              currentMember.shifts = emptyShifts();
-              
-              for (let i = 0; i < Math.min(shiftsFound.length, 7); i++) {
-                const s = shiftsFound[i].toLowerCase();
-                if (s.includes('off') || s.includes('req')) {
-                  currentMember.shifts[i] = "";
-                } else {
-                  currentMember.shifts[i] = shiftsFound[i];
-                }
-              }
-              parsedMembers.push(currentMember);
-           }
-        }
-      }
-      
-      if (parsedMembers.length > 0) {
-        if (confirm(`Found ${parsedMembers.length} team members from image. Append to current roster?`)) {
-           parsedMembers.forEach(m => { m.primaryDepartment = department; });
-           onRosterChange([...roster, ...parsedMembers]);
-           // Persist new people to the global team pool so they carry week to week.
-           const existingIds = new Set(globalEmployees.map(e => e.id));
-           const newGlobals = parsedMembers.filter(m => !existingIds.has(m.id));
-           if (newGlobals.length > 0) onGlobalEmployeesChange([...globalEmployees, ...newGlobals]);
-        }
-      } else {
-        alert("Could not detect any clear schedule rows in the image. Please try a clearer image or a different format.");
+      const { members, warnings, source } = await importScheduleFile(file);
+
+      if (members.length === 0) {
+        alert(
+          'No team members could be read from this file.\n\n' +
+          (warnings.join('\n') ||
+            'Use a Kronos "Wall Schedule" export. A PDF gives the most accurate results.')
+        );
+        return;
       }
 
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
+      const byName = new Map<string, TeamMember>();
+      [...globalEmployees, ...roster].forEach(m => { if (m.name) byName.set(norm(m.name), m); });
+
+      let updated = 0;
+      let created = 0;
+      const builtById = new Map<string, TeamMember>();
+      members.forEach((pm, idx) => {
+        const existing = byName.get(norm(pm.name));
+        const base: TeamMember = existing ? { ...existing } : createTeamMember(roster.length + idx);
+        const merged: TeamMember = {
+          ...base,
+          name: pm.name,
+          status: pm.status,
+          rosterStatus: 'Active',
+          primaryDepartment: department,
+          role: pm.role ?? base.role,
+          seniorityDate: pm.seniorityDate ?? base.seniorityDate,
+          shifts: pm.shifts,
+          unavailable: pm.unavailable.some(Boolean) ? pm.unavailable : (base.unavailable ?? emptyShifts()),
+          timeOff: pm.timeOff.length ? pm.timeOff : base.timeOff,
+        };
+        if (existing) updated++; else created++;
+        builtById.set(merged.id, merged);
+      });
+
+      const summary =
+        `Imported via ${source === 'pdf-text' ? 'PDF text layer' : 'OCR'}.\n\n` +
+        `${members.length} team member(s) read — ${created} new, ${updated} updated.\n\n` +
+        members.slice(0, 12).map(m => `• ${m.name} (${m.status}${m.role ? ', ' + m.role : ''})`).join('\n') +
+        (members.length > 12 ? `\n…and ${members.length - 12} more` : '') +
+        (warnings.length ? `\n\nNotes:\n${warnings.join('\n')}` : '') +
+        `\n\nApply to this week's roster and the team list?`;
+
+      if (!confirm(summary)) return;
+
+      const built = Array.from(builtById.values());
+      onRosterChange([
+        ...roster.map(r => builtById.get(r.id) ?? r),
+        ...built.filter(b => !roster.some(r => r.id === b.id)),
+      ]);
+      onGlobalEmployeesChange([
+        ...globalEmployees.map(g => builtById.get(g.id) ?? g),
+        ...built.filter(b => !globalEmployees.some(g => g.id === b.id)),
+      ]);
     } catch (err) {
       console.error(err);
-      alert("Error processing image.");
+      alert(`Could not import this file.\n\n${err instanceof Error ? err.message : 'Unknown error.'}`);
     } finally {
       setOcrLoading(false);
       event.target.value = '';
@@ -882,10 +877,10 @@ export function EditableRosterStaffingView({
               </AppButton>
             </div>
             <div>
-              <input type="file" id="ocr-upload" accept="image/*" className="hidden" onChange={handleOcrImport} disabled={ocrLoading} />
-              <AppButton onClick={() => document.getElementById('ocr-upload')?.click()} className="rounded-lg border border-primary-fixed text-primary bg-primary-fixed/30 hover:bg-primary-fixed/50 disabled:opacity-50" variant="ghost" disabled={ocrLoading}>
-                <span className="material-symbols-outlined text-[16px] mr-1.5">document_scanner</span>
-                {ocrLoading ? "Scanning..." : "OCR Import"}
+              <input type="file" id="ocr-upload" accept="image/*,application/pdf,.pdf" className="hidden" onChange={handleOcrImport} disabled={ocrLoading} />
+              <AppButton onClick={() => document.getElementById('ocr-upload')?.click()} className="rounded-lg border border-primary-fixed text-primary bg-primary-fixed/30 hover:bg-primary-fixed/50 disabled:opacity-50" variant="ghost" disabled={ocrLoading} title="Import a Kronos Wall Schedule (PDF or image)">
+                <span className="material-symbols-outlined text-[16px] mr-1.5">{ocrLoading ? 'hourglass_top' : 'upload_file'}</span>
+                {ocrLoading ? "Importing…" : "Import Schedule"}
               </AppButton>
             </div>
             <AppButton onClick={() => setShowAddMemberPicker(!showAddMemberPicker)} className="rounded-lg bg-primary text-on-primary hover:opacity-90">
