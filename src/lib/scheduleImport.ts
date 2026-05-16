@@ -309,18 +309,14 @@ async function renderPdfToCanvas(file: File): Promise<HTMLCanvasElement[]> {
   return canvases;
 }
 
-export async function importScheduleFile(file: File): Promise<ImportResult> {
-  const warnings: string[] = [];
+async function loadTokens(
+  file: File, warnings: string[]
+): Promise<{ tokens: Tok[]; source: 'pdf-text' | 'ocr' }> {
   const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
-
   if (isPdf) {
     const { tokens, hadText } = await tokensFromPdf(file);
-    if (hadText) {
-      const members = parseTokens(tokens, warnings);
-      if (members.length > 0) return { members, warnings, source: 'pdf-text' };
-      warnings.push('No rows found in the PDF text layer; retrying with OCR.');
-    }
-    // Scanned PDF — OCR each rendered page.
+    if (hadText) return { tokens, source: 'pdf-text' };
+    warnings.push('No PDF text layer found; using OCR (scanned document).');
     const canvases = await renderPdfToCanvas(file);
     const all: Tok[] = [];
     let offset = 0;
@@ -329,9 +325,105 @@ export async function importScheduleFile(file: File): Promise<ImportResult> {
       t.forEach(tk => all.push({ ...tk, y: tk.y + offset }));
       offset += c.height + 50;
     }
-    return { members: parseTokens(all, warnings), warnings, source: 'ocr' };
+    return { tokens: all, source: 'ocr' };
+  }
+  return { tokens: await ocrToTokens(file, warnings), source: 'ocr' };
+}
+
+export async function importScheduleFile(file: File): Promise<ImportResult> {
+  const warnings: string[] = [];
+  const { tokens, source } = await loadTokens(file, warnings);
+  return { members: parseTokens(tokens, warnings), warnings, source };
+}
+
+export interface AvailabilityRow {
+  name: string;
+  // length 7, Sun..Sat. '' = fully available; 'Unavailable' = hard block;
+  // otherwise the availability window text (e.g. '7am-3pm, 12:30pm-9pm').
+  availability: string[];
+}
+
+export interface AvailabilityImportResult {
+  rows: AvailabilityRow[];
+  warnings: string[];
+  source: 'pdf-text' | 'ocr';
+}
+
+const NAME_RE_A = /^([A-Za-z][A-Za-z'.-]+),\s*([A-Za-z][A-Za-z'.-]+)(?:\s+([A-Za-z]))?/;
+const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+function parseAvailabilityTokens(tokens: Tok[], warnings: string[]): AvailabilityRow[] {
+  const lines = toLines(tokens);
+  if (lines.length === 0) return [];
+
+  let headerIdx = -1;
+  let dayCenters: number[] | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const centers: number[] = new Array(7).fill(NaN);
+    let hits = 0;
+    for (const tk of lines[i].toks) {
+      const w = tk.text.toLowerCase().replace(/[^a-z]/g, '').slice(0, 3);
+      const d = WD.indexOf(w);
+      if (d >= 0 && isNaN(centers[d])) { centers[d] = tk.x; hits++; }
+    }
+    if (hits >= 5) {
+      const known = centers.map((c, idx) => ({ c, idx })).filter(o => !isNaN(o.c));
+      const first = known[0], last = known[known.length - 1];
+      const step = (last.c - first.c) / (last.idx - first.idx);
+      for (let d = 0; d < 7; d++) if (isNaN(centers[d])) centers[d] = first.c + step * (d - first.idx);
+      dayCenters = centers; headerIdx = i; break;
+    }
+  }
+  if (!dayCenters) {
+    warnings.push('Could not detect a Sun–Sat header on the availability sheet.');
+    return [];
   }
 
-  const tokens = await ocrToTokens(file, warnings);
-  return { members: parseTokens(tokens, warnings), warnings, source: 'ocr' };
+  const gap = (dayCenters[6] - dayCenters[0]) / 6;
+  const labelCutoff = dayCenters[0] - gap * 0.6;
+  const colForX = (x: number) => {
+    let best = 0, bd = Infinity;
+    for (let d = 0; d < 7; d++) { const dd = Math.abs(x - dayCenters![d]); if (dd < bd) { bd = dd; best = d; } }
+    return best;
+  };
+
+  const starts: number[] = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const lbl = lines[i].toks.filter(t => t.x < labelCutoff).map(t => t.text).join(' ').trim();
+    if (NAME_RE_A.test(lbl)) starts.push(i);
+  }
+  const stops = [...starts, lines.length];
+
+  const rows: AvailabilityRow[] = [];
+  for (let s = 0; s < starts.length; s++) {
+    const block = lines.slice(starts[s], stops[s + 1] ?? lines.length);
+    const lbl = block.flatMap(l => l.toks.filter(t => t.x < labelCutoff)).map(t => t.text).join(' ').trim();
+    const nm = lbl.match(NAME_RE_A);
+    if (!nm) continue;
+    const name = `${nm[2]}${nm[3] ? ' ' + nm[3] : ''} ${nm[1]}`.trim();
+    const availability = ['', '', '', '', '', '', ''];
+    for (const ln of block) {
+      const byCol: string[] = ['', '', '', '', '', '', ''];
+      for (const tk of ln.toks) {
+        if (tk.x < labelCutoff) continue;
+        const c = colForX(tk.x);
+        byCol[c] += (byCol[c] ? ' ' : '') + tk.text;
+      }
+      for (let d = 0; d < 7; d++) {
+        const cell = byCol[d].trim();
+        if (!cell || availability[d]) continue;
+        if (/^(off|n\/?a|unavail\w*|not avail\w*)$/i.test(cell)) availability[d] = 'Unavailable';
+        else if (/\d/.test(cell)) availability[d] = cell.replace(/\s+/g, ' ');
+      }
+    }
+    rows.push({ name, availability });
+  }
+  if (rows.length === 0) warnings.push('Detected the sheet but could not read any names/rows.');
+  return rows;
+}
+
+export async function importAvailabilityFile(file: File): Promise<AvailabilityImportResult> {
+  const warnings: string[] = [];
+  const { tokens, source } = await loadTokens(file, warnings);
+  return { rows: parseAvailabilityTokens(tokens, warnings), warnings, source };
 }

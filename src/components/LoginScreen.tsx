@@ -39,7 +39,7 @@ export function LoginScreen() {
             </span>
           </div>
           <h1 className="font-headline-xl text-headline-xl text-on-background tracking-tight">
-            Smart Roster Planner
+            Scheduler
           </h1>
           <p className="font-body-md text-body-md text-on-surface-variant mt-1">
             Sign in to manage your schedule

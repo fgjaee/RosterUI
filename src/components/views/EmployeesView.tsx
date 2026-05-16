@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react';
 import type { TeamMember, TimeOffRequest, EmploymentStatus, RosterStatus } from '../../types';
-import { parseShift, createTeamMember, days } from '../../lib/helpers';
+import { parseShift, createTeamMember, days, compareSeniority } from '../../lib/helpers';
 import { Card, CardContent } from '../ui';
 
 interface EmployeesViewProps {
@@ -15,7 +15,7 @@ const DEPARTMENTS = ['Produce', 'Bakery', 'Meat', 'Deli', 'Grocery', 'Front End'
 
 export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: EmployeesViewProps) {
   const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [sortKey, setSortKey] = useState<SortKey>('seniority');
   const [sortAsc, setSortAsc] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'All' | 'FT' | 'PT'>('All');
   const [rosterFilter, setRosterFilter] = useState<'All' | 'Active' | 'Starts Next Week' | 'Inactive'>('All');
@@ -74,12 +74,7 @@ export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: Emplo
       else if (sortKey === 'rosterStatus') cmp = a.rosterStatus.localeCompare(b.rosterStatus);
       else if (sortKey === 'weeklyHours') cmp = a.weeklyHours - b.weeklyHours;
       else if (sortKey === 'primaryDepartment') cmp = (a.primaryDepartment || '').localeCompare(b.primaryDepartment || '');
-      else if (sortKey === 'seniority') {
-        // Most senior first = earliest date. Missing dates sort last.
-        const da = a.seniorityDate || '9999-12-31';
-        const db = b.seniorityDate || '9999-12-31';
-        cmp = da.localeCompare(db);
-      }
+      else if (sortKey === 'seniority') cmp = compareSeniority(a, b);
       return sortAsc ? cmp : -cmp;
     });
 

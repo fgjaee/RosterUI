@@ -67,7 +67,7 @@ export function TopAppBar({
           onClick={() => onNavigate('schedule')}
           className="font-headline-md text-headline-md font-bold text-primary tracking-tight hover:opacity-80 transition-opacity whitespace-nowrap"
         >
-          Smart Roster
+          Scheduler
         </button>
 
         <div className="hidden xl:flex items-center gap-0.5 h-full">
@@ -195,7 +195,7 @@ export function TopAppBar({
           />
           <div className="absolute left-0 top-0 h-full w-72 max-w-[85%] bg-surface-container-low border-r border-outline-variant/40 shadow-2xl flex flex-col animate-in slide-in-from-left duration-200">
             <div className="flex items-center justify-between px-4 h-16 border-b border-outline-variant/40 shrink-0">
-              <span className="font-headline-md text-headline-md font-bold text-primary">Smart Roster</span>
+              <span className="font-headline-md text-headline-md font-bold text-primary">Scheduler</span>
               <button
                 onClick={() => setDrawerOpen(false)}
                 className="flex items-center justify-center h-9 w-9 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors"

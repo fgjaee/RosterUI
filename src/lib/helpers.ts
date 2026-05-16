@@ -1,6 +1,16 @@
 import type { Day, Role, Target, TeamMember, ParsedShift, ShiftDefinitions } from '../types';
 
 export const days: Day[] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// Shared seniority order: FT and PT are separate categories (FT first), then
+// by seniority date (earlier = more senior = first), missing dates last.
+export function compareSeniority(a: TeamMember, b: TeamMember): number {
+  if (a.status !== b.status) return a.status === 'FT' ? -1 : 1;
+  const da = a.seniorityDate || '9999-12-31';
+  const db = b.seniorityDate || '9999-12-31';
+  if (da !== db) return da < db ? -1 : 1;
+  return (a.name || '').localeCompare(b.name || '');
+}
 export const storageKey = "editable-roster-staffing-view-v3";
 export const dailyTruckStartDate = "2026-05-17";
 
