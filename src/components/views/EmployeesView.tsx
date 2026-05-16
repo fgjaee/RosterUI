@@ -340,6 +340,18 @@ export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: Emplo
                               <option value="Excluded">Excluded</option>
                             </select>
                           </div>
+                          <div>
+                            <label className={labelCls}>Min Hours / Week</label>
+                            <input type="number" min={0} max={168} step={1} className={fieldCls}
+                              value={p.minHours ?? ''} disabled={!editable} placeholder="—"
+                              onChange={e => patchMember(p.id, { minHours: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)) })} />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Max Hours / Week</label>
+                            <input type="number" min={0} max={168} step={1} className={fieldCls}
+                              value={p.maxHours ?? ''} disabled={!editable} placeholder={p.status === 'FT' ? '40' : '—'}
+                              onChange={e => patchMember(p.id, { maxHours: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)) })} />
+                          </div>
                           <div className="flex items-end">
                             <button
                               type="button"

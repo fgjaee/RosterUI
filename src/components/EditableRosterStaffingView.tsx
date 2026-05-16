@@ -52,6 +52,7 @@ interface EditableRosterStaffingViewProps {
   isLoading: boolean;
   isSaving: boolean;
   lastSaved?: Date | null;
+  saveScope?: 'cloud' | 'local' | null;
   onForceSave?: () => Promise<void> | void;
   onRosterChange: (roster: TeamMember[]) => void;
   onTargetsChange: (targets: Target[]) => void;
@@ -76,6 +77,7 @@ export function EditableRosterStaffingView({
   isLoading,
   isSaving,
   lastSaved,
+  saveScope,
   onForceSave,
   onRosterChange,
   onTargetsChange,
@@ -747,14 +749,35 @@ export function EditableRosterStaffingView({
         return;
       }
       const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
-      const byName = new Map<string, TeamMember>();
-      [...globalEmployees, ...roster].forEach(m => { if (m.name) byName.set(norm(m.name), m); });
+      const firstTok = (s: string) => norm((s.trim().split(/\s+/)[0] || ''));
+      const people = [...globalEmployees, ...roster].filter(m => m.name);
+      const exact = new Map<string, TeamMember>();
+      const byFirst = new Map<string, TeamMember[]>();
+      people.forEach(m => {
+        exact.set(norm(m.name), m);
+        const f = firstTok(m.name);
+        byFirst.set(f, [...(byFirst.get(f) || []), m]);
+      });
+      const findMatch = (raw: string): TeamMember | undefined => {
+        const n = norm(raw);
+        if (exact.has(n)) return exact.get(n);
+        const f = firstTok(raw);
+        const fm = byFirst.get(f);
+        if (fm && fm.length === 1) return fm[0];               // unique first name
+        if (fm) { const e = fm.find(m => norm(m.name) === n); if (e) return e; }
+        // last resort: unambiguous substring containment (>= 4 chars)
+        const cand = people.filter(m => {
+          const mn = norm(m.name);
+          return mn.length >= 4 && n.length >= 4 && (mn.includes(n) || n.includes(mn));
+        });
+        return cand.length === 1 ? cand[0] : undefined;
+      };
 
       let matched = 0;
       const unmatched: string[] = [];
       const patch = new Map<string, string[]>(); // id -> availability[7]
       rows.forEach(r => {
-        const ex = byName.get(norm(r.name));
+        const ex = findMatch(r.name);
         if (ex) { matched++; patch.set(ex.id, r.availability); }
         else unmatched.push(r.name);
       });
@@ -926,8 +949,12 @@ export function EditableRosterStaffingView({
               <span className="material-symbols-outlined text-[16px] mr-1.5">{isSaving ? 'cloud_sync' : 'cloud_upload'}</span>
               {isSaving ? 'Saving…' : 'Save to Cloud'}
             </AppButton>
-            <span className="self-center text-label-bold text-on-surface-variant whitespace-nowrap">
-              {isSaving ? 'Saving…' : lastSaved ? `Saved ${lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Autosaves every few seconds'}
+            <span className={`self-center text-label-bold whitespace-nowrap ${saveScope === 'local' ? 'text-status-closer-text' : 'text-on-surface-variant'}`}>
+              {isSaving
+                ? 'Saving…'
+                : lastSaved
+                  ? `${saveScope === 'local' ? 'Saved locally (cloud offline)' : 'Saved'} ${lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                  : 'Autosaves every few seconds'}
             </span>
             <AppButton onClick={handleSaveToFile} className="rounded-lg border border-outline-variant hover:bg-surface-container-low" variant="ghost" title="Download a local JSON backup">
               <span className="material-symbols-outlined text-[16px] mr-1.5">download</span>

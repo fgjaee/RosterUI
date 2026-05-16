@@ -14,60 +14,76 @@ export interface AppData {
 }
 
 const COLLECTION_NAME = 'appData';
+const LS_PREFIX = 'rosterui:';
 
-export async function saveAppState(department: string, weekId: string, data: Omit<AppData, 'lastUpdated' | 'department'>) {
+// Local mirror so data always survives a reload even when Firebase/network
+// is unavailable (missing credentials, offline, blocked). Firebase stays
+// the source of truth when it works; localStorage is the fallback.
+function lsSet(key: string, value: unknown) {
+  try { localStorage.setItem(LS_PREFIX + key, JSON.stringify(value)); } catch { /* quota/SSR */ }
+}
+function lsGet<T>(key: string): T | null {
   try {
-    const docId = `${department}_${weekId}`;
-    const docRef = doc(db, COLLECTION_NAME, docId);
-    await setDoc(docRef, {
-      ...data,
-      department,
-      lastUpdated: new Date().toISOString()
-    });
-    return true;
+    const raw = localStorage.getItem(LS_PREFIX + key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch { return null; }
+}
+
+export type SaveOutcome = 'cloud' | 'local';
+
+export async function saveAppState(
+  department: string, weekId: string, data: Omit<AppData, 'lastUpdated' | 'department'>
+): Promise<SaveOutcome> {
+  const docId = `${department}_${weekId}`;
+  const payload: AppData = { ...data, department, lastUpdated: new Date().toISOString() };
+  lsSet(`appData:${docId}`, payload);
+  try {
+    await setDoc(doc(db, COLLECTION_NAME, docId), payload);
+    return 'cloud';
   } catch (error) {
-    console.error('Error saving app state:', error);
-    return false;
+    console.error('Cloud save failed; kept a local copy:', error);
+    return 'local';
   }
 }
 
 export async function loadAppState(department: string, weekId: string): Promise<AppData | null> {
+  const docId = `${department}_${weekId}`;
   try {
-    const docId = `${department}_${weekId}`;
-    const docRef = doc(db, COLLECTION_NAME, docId);
-    const docSnap = await getDoc(docRef);
+    const docSnap = await getDoc(doc(db, COLLECTION_NAME, docId));
     if (docSnap.exists()) {
-      return docSnap.data() as AppData;
+      const remote = docSnap.data() as AppData;
+      lsSet(`appData:${docId}`, remote);
+      return remote;
     }
-    return null;
   } catch (error) {
-    console.error('Error loading app state:', error);
-    return null;
+    console.error('Cloud load failed; falling back to local copy:', error);
   }
+  return lsGet<AppData>(`appData:${docId}`);
 }
 
-export async function saveGlobalEmployees(employees: TeamMember[]) {
+export async function saveGlobalEmployees(employees: TeamMember[]): Promise<SaveOutcome> {
+  lsSet('globalEmployees', employees);
   try {
-    const docRef = doc(db, 'globalConfig', 'employees');
-    await setDoc(docRef, { list: employees, lastUpdated: new Date().toISOString() });
-    return true;
+    await setDoc(doc(db, 'globalConfig', 'employees'), {
+      list: employees, lastUpdated: new Date().toISOString()
+    });
+    return 'cloud';
   } catch (error) {
-    console.error('Error saving global employees:', error);
-    return false;
+    console.error('Cloud save (global employees) failed; kept a local copy:', error);
+    return 'local';
   }
 }
 
 export async function loadGlobalEmployees(): Promise<TeamMember[]> {
   try {
-    const docRef = doc(db, 'globalConfig', 'employees');
-    const docSnap = await getDoc(docRef);
+    const docSnap = await getDoc(doc(db, 'globalConfig', 'employees'));
     if (docSnap.exists()) {
-      const data = docSnap.data() as { list: TeamMember[] };
-      return data.list || [];
+      const list = (docSnap.data() as { list: TeamMember[] }).list || [];
+      lsSet('globalEmployees', list);
+      return list;
     }
-    return [];
   } catch (error) {
-    console.error('Error loading global employees:', error);
-    return [];
+    console.error('Cloud load (global employees) failed; falling back to local copy:', error);
   }
+  return lsGet<TeamMember[]>('globalEmployees') || [];
 }

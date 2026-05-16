@@ -349,8 +349,19 @@ export interface AvailabilityImportResult {
   source: 'pdf-text' | 'ocr';
 }
 
-const NAME_RE_A = /^([A-Za-z][A-Za-z'.-]+),\s*([A-Za-z][A-Za-z'.-]+)(?:\s+([A-Za-z]))?/;
 const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const NOT_A_NAME = /^(name|employee|team\s*member|associate|availability|schedule|day|days|week|notes?|total)\b/i;
+
+// Accept "Last, First M" -> "First M Last", otherwise keep as written
+// ("Kenneth", "Kenneth Smith"). Returns '' when the label isn't a name.
+function normalizeLabelToName(raw: string): string {
+  const lbl = raw.replace(/\s+/g, ' ').trim();
+  if (!lbl || NOT_A_NAME.test(lbl)) return '';
+  if (!/[A-Za-z]{2,}/.test(lbl)) return '';
+  const m = lbl.match(/^([A-Za-z][A-Za-z'.-]+),\s*([A-Za-z][A-Za-z'.-]+)(?:\s+([A-Za-z]\.?))?/);
+  if (m) return `${m[2]}${m[3] ? ' ' + m[3] : ''} ${m[1]}`.trim();
+  return lbl.replace(/[^A-Za-z'.\- ]/g, '').trim();
+}
 
 function parseAvailabilityTokens(tokens: Tok[], warnings: string[]): AvailabilityRow[] {
   const lines = toLines(tokens);
@@ -390,7 +401,7 @@ function parseAvailabilityTokens(tokens: Tok[], warnings: string[]): Availabilit
   const starts: number[] = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const lbl = lines[i].toks.filter(t => t.x < labelCutoff).map(t => t.text).join(' ').trim();
-    if (NAME_RE_A.test(lbl)) starts.push(i);
+    if (normalizeLabelToName(lbl)) starts.push(i);
   }
   const stops = [...starts, lines.length];
 
@@ -398,9 +409,8 @@ function parseAvailabilityTokens(tokens: Tok[], warnings: string[]): Availabilit
   for (let s = 0; s < starts.length; s++) {
     const block = lines.slice(starts[s], stops[s + 1] ?? lines.length);
     const lbl = block.flatMap(l => l.toks.filter(t => t.x < labelCutoff)).map(t => t.text).join(' ').trim();
-    const nm = lbl.match(NAME_RE_A);
-    if (!nm) continue;
-    const name = `${nm[2]}${nm[3] ? ' ' + nm[3] : ''} ${nm[1]}`.trim();
+    const name = normalizeLabelToName(lbl);
+    if (!name) continue;
     const availability = ['', '', '', '', '', '', ''];
     for (const ln of block) {
       const byCol: string[] = ['', '', '', '', '', '', ''];
