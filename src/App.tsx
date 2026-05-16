@@ -170,10 +170,19 @@ function App() {
           .filter(m => m.primaryDepartment === currentDepartment && m.rosterStatus !== 'Inactive')
           .map(m => {
             const saved = savedRoster.find(r => r.id === m.id)
+            const savedHasShifts = !!saved?.shifts?.some(s => s && s.trim() !== "")
+            const hasPattern = !!m.scheduleLocked && Array.isArray(m.fixedSchedule) && m.fixedSchedule.length === 7
+            // Respect any week that already has real shifts for this person.
+            // Otherwise, seed locked members from their recurring pattern.
+            const seededShifts = savedHasShifts
+              ? saved!.shifts
+              : hasPattern
+                ? [...(m.fixedSchedule as string[])]
+                : (saved?.shifts || emptyShifts())
             return {
               ...m,
               // Keep week-specific shifts/unavailability/coverage
-              shifts: saved?.shifts || emptyShifts(),
+              shifts: seededShifts,
               unavailable: saved?.unavailable || emptyShifts(),
               coverageStatus: saved?.coverageStatus || 'Included',
               isBorrowed: false

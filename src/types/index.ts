@@ -14,6 +14,8 @@ export type TeamMember = {
   primaryDepartment?: string;
   crossTrainedDepartments?: string[];
   isBorrowed?: boolean;
+  scheduleLocked?: boolean;
+  fixedSchedule?: string[];
 };
 
 export type WeekConfig = {

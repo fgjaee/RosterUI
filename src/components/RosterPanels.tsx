@@ -28,6 +28,8 @@ interface CompactRosterPanelsProps {
   onUpdateStatus: (rowIndex: number, value: EmploymentStatus) => void;
   onUpdateRosterStatus: (rowIndex: number, value: RosterStatus) => void;
   onRemovePerson: (id: string) => void;
+  onToggleLock: (id: string) => void;
+  onApplyPattern: (id: string) => void;
 }
 
 export function CompactRosterPanels({
@@ -41,6 +43,8 @@ export function CompactRosterPanels({
   onUpdateStatus,
   onUpdateRosterStatus,
   onRemovePerson,
+  onToggleLock,
+  onApplyPattern,
 }: CompactRosterPanelsProps) {
   return (
     <div className="space-y-4">
@@ -72,6 +76,26 @@ export function CompactRosterPanels({
                       <option value="Starts Next Week">Next Wk</option>
                       <option value="Inactive">Inactive</option>
                     </AppSelect>
+                    <AppButton
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => onToggleLock(person.id)}
+                      title={person.scheduleLocked ? 'Unlock recurring schedule' : 'Lock as recurring weekly schedule'}
+                      className={`h-9 w-9 rounded-lg ${person.scheduleLocked ? 'text-primary bg-primary-fixed/40' : 'text-on-surface-variant'}`}
+                    >
+                      <span className="material-symbols-outlined text-[18px]">{person.scheduleLocked ? 'lock' : 'lock_open'}</span>
+                    </AppButton>
+                    {person.scheduleLocked && (
+                      <AppButton
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => onApplyPattern(person.id)}
+                        title="Reset this week to the saved pattern"
+                        className="h-9 w-9 rounded-lg text-on-surface-variant"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">restart_alt</span>
+                      </AppButton>
+                    )}
                     <AppButton variant="ghost" size="icon" onClick={() => onRemovePerson(person.id)} className="h-9 w-9 rounded-lg text-error" aria-label={`Remove ${person.name || 'team member'}`}>
                       <span className="text-lg leading-none">×</span>
                     </AppButton>

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Card, CardContent, AppButton, AppInput, AppSelect } from './ui';
 import { CompactRosterPanels, PrintableRoster } from './RosterPanels';
 import { DashboardSummary } from './DashboardSummary';
+import { reviseSchedule, type RevisionResult, type ScheduleChange } from '../lib/optimizer';
 import type {
   Role, EmploymentStatus, RosterStatus, TeamMember, Target,
   SummaryRow, DailyReduction,
@@ -531,6 +532,88 @@ export function EditableRosterStaffingView({
     onRosterChange(roster.filter((person) => person.id !== id));
   }
 
+  // ── Recurring schedule patterns ────────────────────────────────
+  function setLockState(personId: string, locked: boolean, capturePattern: boolean) {
+    const current = roster.find(p => p.id === personId);
+    const pattern = capturePattern ? [...(current?.shifts ?? emptyShifts())] : undefined;
+    const patch = <T extends TeamMember>(p: T): T => ({
+      ...p,
+      scheduleLocked: locked,
+      ...(pattern ? { fixedSchedule: pattern } : {}),
+    });
+    onRosterChange(roster.map(p => (p.id === personId ? patch(p) : p)));
+    if (globalEmployees.some(e => e.id === personId)) {
+      onGlobalEmployeesChange(globalEmployees.map(e => (e.id === personId ? patch(e) : e)));
+    }
+  }
+
+  function toggleLock(personId: string) {
+    const person = roster.find(p => p.id === personId);
+    const next = !person?.scheduleLocked;
+    setLockState(personId, next, next);
+  }
+
+  function savePatternFromWeek(personId: string) {
+    setLockState(personId, true, true);
+  }
+
+  function applyPattern(personId: string) {
+    const person = roster.find(p => p.id === personId);
+    if (!person?.fixedSchedule || person.fixedSchedule.length !== 7) return;
+    const pattern = person.fixedSchedule;
+    onRosterChange(roster.map(p => (p.id === personId ? { ...p, shifts: [...pattern] } : p)));
+  }
+
+  function applyAllPatterns() {
+    onRosterChange(
+      roster.map(p =>
+        p.scheduleLocked && Array.isArray(p.fixedSchedule) && p.fixedSchedule.length === 7
+          ? { ...p, shifts: [...(p.fixedSchedule as string[])] }
+          : p
+      )
+    );
+  }
+
+  const lockedCount = roster.filter(p => p.scheduleLocked && p.fixedSchedule?.length === 7).length;
+
+  // ── Smart schedule revision (rule-based; LLM-swappable) ─────────
+  const [revision, setRevision] = useState<RevisionResult | null>(null);
+
+  function runRevision() {
+    setRevision(
+      reviseSchedule({
+        roster,
+        targets,
+        shiftDefinitions,
+        autoDeductLunch,
+        minimumShiftLength: toNumber(minimumShiftLength),
+        weeklyHoursAvailable: toNumber(weeklyHoursAvailable),
+      })
+    );
+  }
+
+  function applyChange(change: ScheduleChange) {
+    onRosterChange(
+      roster.map(p =>
+        p.id === change.personId
+          ? { ...p, shifts: p.shifts.map((s, i) => (i === change.dayIndex ? change.to : s)) }
+          : p
+      )
+    );
+    setRevision(prev => (prev ? { ...prev, changes: prev.changes.filter(c => c !== change) } : prev));
+  }
+
+  function applyAllChanges() {
+    if (!revision) return;
+    const next = roster.map(p => ({ ...p, shifts: [...p.shifts] }));
+    for (const change of revision.changes) {
+      const person = next.find(p => p.id === change.personId);
+      if (person) person.shifts[change.dayIndex] = change.to;
+    }
+    onRosterChange(next);
+    setRevision(prev => (prev ? { ...prev, changes: [] } : prev));
+  }
+
   function handleSaveToFile() {
     const payload: SavedRosterState = {
       roster,
@@ -763,6 +846,16 @@ export function EditableRosterStaffingView({
             <AppButton onClick={() => setPrintMode('availability')} className="rounded-lg border border-outline-variant hover:bg-surface-container-low" variant="ghost">
               <span className="material-symbols-outlined text-[16px] mr-1.5">print</span>
               Print Availability
+            </AppButton>
+            <AppButton
+              onClick={applyAllPatterns}
+              disabled={lockedCount === 0}
+              title={lockedCount === 0 ? 'No team members have a locked recurring schedule yet' : 'Copy every locked pattern into this week'}
+              className="rounded-lg border border-outline-variant hover:bg-surface-container-low disabled:opacity-50"
+              variant="ghost"
+            >
+              <span className="material-symbols-outlined text-[16px] mr-1.5">event_repeat</span>
+              Apply Patterns{lockedCount > 0 ? ` (${lockedCount})` : ''}
             </AppButton>
             <AppButton onClick={handleSaveToFile} className="rounded-lg border border-outline-variant hover:bg-surface-container-low" variant="ghost">
               <span className="material-symbols-outlined text-[16px] mr-1.5">download</span>
@@ -1237,6 +1330,8 @@ export function EditableRosterStaffingView({
             onUpdateStatus={updateStatus}
             onUpdateRosterStatus={updateRosterStatus}
             onRemovePerson={removePerson}
+            onToggleLock={toggleLock}
+            onApplyPattern={applyPattern}
           />
         ) : (
         <>
@@ -1276,6 +1371,28 @@ export function EditableRosterStaffingView({
                             <option value="Starts Next Week">Starts Next Week</option>
                             <option value="Inactive">Inactive</option>
                           </AppSelect>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <AppButton
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => toggleLock(person.id)}
+                            title={person.scheduleLocked ? 'Unlock recurring schedule' : 'Lock as recurring weekly schedule'}
+                            className={`h-8 w-8 rounded-lg ${person.scheduleLocked ? 'text-primary bg-primary-fixed/40' : 'text-on-surface-variant'}`}
+                          >
+                            <span className="material-symbols-outlined text-[18px]">{person.scheduleLocked ? 'lock' : 'lock_open'}</span>
+                          </AppButton>
+                          {person.scheduleLocked && (
+                            <>
+                              <AppButton variant="ghost" size="icon" onClick={() => applyPattern(person.id)} title="Reset this week to the saved pattern" className="h-8 w-8 rounded-lg text-on-surface-variant">
+                                <span className="material-symbols-outlined text-[18px]">restart_alt</span>
+                              </AppButton>
+                              <AppButton variant="ghost" size="icon" onClick={() => savePatternFromWeek(person.id)} title="Save this week's shifts as the new pattern" className="h-8 w-8 rounded-lg text-on-surface-variant">
+                                <span className="material-symbols-outlined text-[18px]">bookmark_add</span>
+                              </AppButton>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-primary">Fixed</span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -1527,6 +1644,79 @@ export function EditableRosterStaffingView({
             ) : (
               <div className="mb-6 rounded-xl border border-outline-variant bg-surface-container-low p-4 text-center text-body-md text-on-surface-variant">
                 No safe part-time reductions found.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-xl shadow-sm border-outline-variant">
+          <CardContent className="p-4">
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-headline-md text-on-surface">Smart Schedule Revision</h2>
+                <p className="text-body-md text-on-surface-variant">
+                  Auto-revises the schedule to hit coverage minimums and the weekly labor budget. Only adjusts flexible staff &mdash; team members with a locked recurring schedule are never changed. Review each change before applying.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                {revision && revision.changes.length > 0 && (
+                  <AppButton onClick={applyAllChanges} className="rounded-lg bg-primary text-on-primary hover:opacity-90">
+                    <span className="material-symbols-outlined text-[16px] mr-1.5">done_all</span>
+                    Apply All ({revision.changes.length})
+                  </AppButton>
+                )}
+                <AppButton onClick={runRevision} variant="ghost" className="rounded-lg border border-primary-fixed text-primary bg-primary-fixed/30 hover:bg-primary-fixed/50">
+                  <span className="material-symbols-outlined text-[16px] mr-1.5">auto_fix_high</span>
+                  {revision ? 'Regenerate' : 'Generate Revision'}
+                </AppButton>
+              </div>
+            </div>
+
+            {!revision && (
+              <div className="rounded-lg border border-dashed border-outline-variant bg-surface-container-low p-4 text-body-md text-on-surface-variant">
+                Click <span className="font-semibold text-on-surface">Generate Revision</span> to compute a proposed set of changes.
+              </div>
+            )}
+
+            {revision && revision.changes.length === 0 && (
+              <div className="rounded-lg border border-status-opener-text/30 bg-status-opener-bg p-4 text-body-md text-status-opener-text">
+                {revision.notes.length === 0
+                  ? 'No changes needed — coverage and labor budget are already met with flexible staff.'
+                  : 'No further changes can be applied safely. See notes below.'}
+              </div>
+            )}
+
+            {revision && revision.changes.length > 0 && (
+              <div className="space-y-2">
+                {revision.changes.map((change, i) => (
+                  <div key={`${change.personId}-${change.dayIndex}-${i}`} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-outline-variant/40 bg-surface-container-lowest p-3">
+                    <div className="flex items-center gap-3">
+                      <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full ${change.kind === 'add' ? 'bg-status-opener-bg text-status-opener-text' : 'bg-error-container text-on-error-container'}`}>
+                        <span className="material-symbols-outlined text-[16px]">{change.kind === 'add' ? 'add' : 'remove'}</span>
+                      </span>
+                      <div>
+                        <div className="font-semibold text-on-surface">
+                          {change.name || '—'} <span className="font-normal text-on-surface-variant">· {change.day}</span>
+                        </div>
+                        <div className="text-body-sm text-on-surface-variant font-data-tabular tabular-nums">
+                          {change.from ? change.from : 'OFF'} → {change.to ? change.to : 'OFF'} <span className="not-italic">· {change.reason}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <AppButton onClick={() => applyChange(change)} variant="tonal" size="sm" className="rounded-lg">
+                      Apply
+                    </AppButton>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {revision && revision.notes.length > 0 && (
+              <div className="mt-3 rounded-lg border border-error/30 bg-error-container/40 p-3">
+                <div className="mb-1 text-label-bold font-bold uppercase tracking-wider text-on-error-container">Notes</div>
+                <ul className="list-disc space-y-1 pl-5 text-body-sm text-on-error-container">
+                  {revision.notes.map((note, i) => <li key={i}>{note}</li>)}
+                </ul>
               </div>
             )}
           </CardContent>
