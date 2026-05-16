@@ -158,15 +158,15 @@ function App() {
         
         // 1. Load Global Employees First
         const globalEmps = await loadGlobalEmployees()
-        setGlobalEmployees(globalEmps.length > 0 ? globalEmps : defaultRoster)
+        const effectiveGlobals = globalEmps.length > 0 ? globalEmps : defaultRoster
 
         // 2. Load Departmental/Weekly Data
         const data = await loadAppState(currentDepartment, currentWeekId)
         const savedRoster = data?.roster || []
 
-        // Synchronize with globalEmployees to ensure names/status are current
+        // Synchronize with the global pool to ensure profile data is current.
         // 1. Members whose primary department is THIS department
-        const deptMembers = globalEmps
+        const deptMembers = effectiveGlobals
           .filter(m => m.primaryDepartment === currentDepartment && m.rosterStatus !== 'Inactive')
           .map(m => {
             const saved = savedRoster.find(r => r.id === m.id)
@@ -179,12 +179,16 @@ function App() {
               : hasPattern
                 ? [...(m.fixedSchedule as string[])]
                 : (saved?.shifts || emptyShifts())
+            // Availability is a standing rule on the profile — it persists
+            // week to week and is never reset by the weekly snapshot.
+            const standingUnavailable = Array.isArray(m.unavailable) && m.unavailable.length === 7
+              ? [...m.unavailable]
+              : emptyShifts()
             return {
               ...m,
-              // Keep week-specific shifts/unavailability/coverage
               shifts: seededShifts,
-              unavailable: saved?.unavailable || emptyShifts(),
-              coverageStatus: saved?.coverageStatus || 'Included',
+              unavailable: standingUnavailable,
+              coverageStatus: saved?.coverageStatus || m.coverageStatus || 'Included',
               isBorrowed: false
             }
           })
@@ -192,18 +196,21 @@ function App() {
         // 2. Members who are borrowed (primary dept is NOT this one, but they have shifts saved here)
         const borrowedMembers = savedRoster
           .filter(r => {
-            const global = globalEmps.find(g => g.id === r.id)
+            const global = effectiveGlobals.find(g => g.id === r.id)
             const isPrimaryHere = global?.primaryDepartment === currentDepartment
             const hasShifts = r.shifts.some(s => s && s.trim() !== "")
             // Only keep if they have shifts OR were manually flagged as borrowed
             return !isPrimaryHere && (hasShifts || r.isBorrowed)
           })
           .map(r => {
-            const global = globalEmps.find(g => g.id === r.id)
+            const global = effectiveGlobals.find(g => g.id === r.id)
+            const standingUnavailable = global && Array.isArray(global.unavailable) && global.unavailable.length === 7
+              ? [...global.unavailable]
+              : (r.unavailable || emptyShifts())
             return {
               ...(global || r), // Use global profile if available
               shifts: r.shifts,
-              unavailable: r.unavailable,
+              unavailable: standingUnavailable,
               coverageStatus: r.coverageStatus || 'Included',
               isBorrowed: true
             }
@@ -211,6 +218,21 @@ function App() {
 
         const finalRoster = [...deptMembers, ...borrowedMembers]
         setRoster(finalRoster)
+
+        // Promote any roster member missing from the global pool so the whole
+        // team persists and shows on the Employees page (no re-adding weekly).
+        const missing = finalRoster.filter(fr => !effectiveGlobals.some(g => g.id === fr.id))
+        const reconciledGlobals = missing.length > 0
+          ? [
+              ...effectiveGlobals,
+              ...missing.map(m => ({
+                ...m,
+                primaryDepartment: m.primaryDepartment || currentDepartment,
+                isBorrowed: false
+              }))
+            ]
+          : effectiveGlobals
+        setGlobalEmployees(reconciledGlobals)
 
         if (data) {
           setTargets(data.targets)

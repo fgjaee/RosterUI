@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react';
 import type { TeamMember, TimeOffRequest, EmploymentStatus, RosterStatus } from '../../types';
-import { parseShift, createTeamMember } from '../../lib/helpers';
+import { parseShift, createTeamMember, days } from '../../lib/helpers';
 import { Card, CardContent } from '../ui';
 
 interface EmployeesViewProps {
@@ -95,7 +95,6 @@ export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: Emplo
   );
 
   const active = roster.filter(r => r.rosterStatus === 'Active').length;
-  const next = roster.filter(r => r.rosterStatus === 'Starts Next Week').length;
   const inactive = roster.filter(r => r.rosterStatus === 'Inactive').length;
 
   const fieldCls =
@@ -123,10 +122,9 @@ export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: Emplo
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 gap-4">
         {[
           { label: 'Active', value: active, color: 'text-status-opener-text', bg: 'bg-status-opener-bg' },
-          { label: 'Starting Next Week', value: next, color: 'text-primary', bg: 'bg-primary/10' },
           { label: 'Inactive', value: inactive, color: 'text-on-surface-variant', bg: 'bg-surface-container' },
         ].map(({ label, value, color, bg }) => (
           <Card key={label}>
@@ -311,10 +309,9 @@ export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: Emplo
                           </div>
                           <div>
                             <label className={labelCls}>Roster Status</label>
-                            <select className={fieldCls} value={p.rosterStatus} disabled={!editable}
+                            <select className={fieldCls} value={p.rosterStatus === 'Starts Next Week' ? 'Active' : p.rosterStatus} disabled={!editable}
                               onChange={e => patchMember(p.id, { rosterStatus: e.target.value as RosterStatus })}>
                               <option value="Active">Active</option>
-                              <option value="Starts Next Week">Starts Next Week</option>
                               <option value="Inactive">Inactive</option>
                             </select>
                           </div>
@@ -358,6 +355,36 @@ export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: Emplo
                               <span className="material-symbols-outlined text-[16px]">{p.isTeamLeader ? 'star' : 'star_outline'}</span>
                               {p.isTeamLeader ? 'Team Leader' : 'Mark as Leader'}
                             </button>
+                          </div>
+                        </div>
+
+                        {/* Preferred days off (soft preference) */}
+                        <div className="mt-5">
+                          <span className={labelCls}>Preferred Days Off</span>
+                          <p className="text-body-sm text-on-surface-variant mb-2">
+                            A soft preference (not a hard block). The scheduler tries to keep these days free but may override when coverage requires it.
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {days.map((dayName, di) => {
+                              const on = !!p.preferredDaysOff?.[di];
+                              return (
+                                <button
+                                  key={dayName}
+                                  type="button"
+                                  disabled={!editable}
+                                  onClick={() => {
+                                    const arr = (p.preferredDaysOff && p.preferredDaysOff.length === 7)
+                                      ? [...p.preferredDaysOff]
+                                      : [false, false, false, false, false, false, false];
+                                    arr[di] = !arr[di];
+                                    patchMember(p.id, { preferredDaysOff: arr });
+                                  }}
+                                  className={`rounded-md px-3 py-1.5 text-body-sm font-semibold transition-colors disabled:opacity-60 ${on ? 'bg-secondary text-on-secondary' : 'bg-surface-container text-on-surface hover:bg-surface-container-high'}`}
+                                >
+                                  {dayName}
+                                </button>
+                              );
+                            })}
                           </div>
                         </div>
 

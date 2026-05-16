@@ -148,6 +148,10 @@ export function reviseSchedule(args: ReviseScheduleArgs): RevisionResult {
           const bOver =
             cap != null && b.status === 'PT' && weeklyHoursOf(b, autoDeductLunch) + stdHrs > cap ? 1 : 0;
           if (aOver !== bOver) return aOver - bOver;
+          // Soft preference: avoid scheduling someone on a preferred day off.
+          const aPref = a.preferredDaysOff?.[d] ? 1 : 0;
+          const bPref = b.preferredDaysOff?.[d] ? 1 : 0;
+          if (aPref !== bPref) return aPref - bPref;
           return seniorityValue(a) - seniorityValue(b);
         });
 
@@ -198,6 +202,10 @@ export function reviseSchedule(args: ReviseScheduleArgs): RevisionResult {
               : true
           )
           .sort((a, b) => {
+            // Honor preferred days off first: cut those shifts before others.
+            const aPref = a.p.preferredDaysOff?.[d] ? 1 : 0;
+            const bPref = b.p.preferredDaysOff?.[d] ? 1 : 0;
+            if (aPref !== bPref) return bPref - aPref;
             // Least senior first (larger seniority value = more junior).
             const s = seniorityValue(b.p) - seniorityValue(a.p);
             if (s !== 0 && !Number.isNaN(s)) return s;

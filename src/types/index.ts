@@ -28,6 +28,9 @@ export type TeamMember = {
   jobTitle?: string;
   birthday?: string;
   timeOff?: TimeOffRequest[];
+  // Soft preference (Sun..Sat). Not a hard block — the scheduler tries to
+  // honor it but may override when coverage requires it.
+  preferredDaysOff?: boolean[];
 };
 
 export type WeekConfig = {

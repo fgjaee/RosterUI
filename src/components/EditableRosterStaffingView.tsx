@@ -433,14 +433,22 @@ export function EditableRosterStaffingView({
   }
 
   function updateUnavailable(rowIndex: number, dayIndex: number, value: string) {
-    onRosterChange(roster.map((person, index) => {
+    const updatedRoster = roster.map((person, index) => {
       if (index !== rowIndex) return person;
-
       return {
         ...person,
         unavailable: person.unavailable.map((reason, reasonIndex) => reasonIndex === dayIndex ? value : reason),
       };
-    }));
+    });
+    onRosterChange(updatedRoster);
+    // Availability is a standing scheduling rule: persist it to the global
+    // profile so it carries week to week until changed.
+    const personToSync = updatedRoster[rowIndex];
+    if (personToSync) {
+      onGlobalEmployeesChange(globalEmployees.map(p =>
+        p.id === personToSync.id ? { ...p, unavailable: [...personToSync.unavailable] } : p
+      ));
+    }
   }
 
   function updateName(rowIndex: number, value: string) {
