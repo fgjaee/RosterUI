@@ -3,6 +3,12 @@ export type Role = "open" | "mid" | "close" | "overnight" | "excluded" | "none";
 export type EmploymentStatus = "FT" | "PT";
 export type RosterStatus = "Active" | "Starts Next Week" | "Inactive";
 
+export type TimeOffRequest = {
+  date: string; // ISO YYYY-MM-DD
+  type: "Paid" | "Unpaid";
+  note?: string;
+};
+
 export type TeamMember = {
   id: string;
   name: string;
@@ -18,6 +24,10 @@ export type TeamMember = {
   fixedSchedule?: string[];
   seniorityDate?: string;
   isTeamLeader?: boolean;
+  role?: string;
+  jobTitle?: string;
+  birthday?: string;
+  timeOff?: TimeOffRequest[];
 };
 
 export type WeekConfig = {

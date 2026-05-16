@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import type { TeamMember } from '../../types';
-import { parseShift } from '../../lib/helpers';
+import { Fragment, useState } from 'react';
+import type { TeamMember, TimeOffRequest, EmploymentStatus, RosterStatus } from '../../types';
+import { parseShift, createTeamMember } from '../../lib/helpers';
 import { Card, CardContent } from '../ui';
 
 interface EmployeesViewProps {
@@ -11,18 +11,45 @@ interface EmployeesViewProps {
 
 type SortKey = 'name' | 'status' | 'rosterStatus' | 'weeklyHours' | 'primaryDepartment' | 'seniority';
 
+const DEPARTMENTS = ['Produce', 'Bakery', 'Meat', 'Deli', 'Grocery', 'Front End'];
+
 export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: EmployeesViewProps) {
-  function patchMember(id: string, patch: Partial<TeamMember>) {
-    onRosterChange?.(roster.map(p => (p.id === id ? { ...p, ...patch } : p)));
-  }
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortAsc, setSortAsc] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'All' | 'FT' | 'PT'>('All');
   const [rosterFilter, setRosterFilter] = useState<'All' | 'Active' | 'Starts Next Week' | 'Inactive'>('All');
   const [deptFilter, setDeptFilter] = useState('All');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const departments = ['All', 'Produce', 'Bakery', 'Meat', 'Deli', 'Grocery', 'Front End'];
+  const editable = !!onRosterChange;
+
+  function patchMember(id: string, patch: Partial<TeamMember>) {
+    onRosterChange?.(roster.map(p => (p.id === id ? { ...p, ...patch } : p)));
+  }
+
+  function addMember() {
+    if (!onRosterChange) return;
+    const m = createTeamMember(roster.length);
+    m.name = '';
+    m.primaryDepartment = deptFilter !== 'All' ? deptFilter : 'Produce';
+    onRosterChange([...roster, m]);
+    setExpandedId(m.id);
+    setSearch('');
+  }
+
+  function removeMember(p: TeamMember) {
+    if (!onRosterChange) return;
+    if (!confirm(`Remove ${p.name || 'this team member'} from the team? They will no longer appear on future weeks.`)) return;
+    onRosterChange(roster.filter(x => x.id !== p.id));
+    if (expandedId === p.id) setExpandedId(null);
+  }
+
+  function updateTimeOff(p: TeamMember, next: TimeOffRequest[]) {
+    patchMember(p.id, { timeOff: next });
+  }
+
+  const departments = ['All', ...DEPARTMENTS];
 
   const withHours = roster.map(p => {
     const weeklyHours = p.shifts.reduce((sum, s) => {
@@ -71,11 +98,28 @@ export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: Emplo
   const next = roster.filter(r => r.rosterStatus === 'Starts Next Week').length;
   const inactive = roster.filter(r => r.rosterStatus === 'Inactive').length;
 
+  const fieldCls =
+    'w-full bg-surface-container-low border border-outline-variant/30 rounded-md px-2 py-1.5 text-body-sm text-on-surface focus:ring-2 focus:ring-primary/20 focus:border-primary/50 outline-none';
+  const labelCls = 'block text-label-bold uppercase text-on-surface-variant mb-1';
+
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="font-headline-xl text-headline-xl text-on-surface tracking-tight">Employees</h1>
-        <p className="font-body-md text-body-md text-on-surface-variant mt-1">Full directory of all team members.</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="font-headline-xl text-headline-xl text-on-surface tracking-tight">Employees</h1>
+          <p className="font-body-md text-body-md text-on-surface-variant mt-1">
+            Full directory of all team members. This list persists week to week until a member is removed here.
+          </p>
+        </div>
+        {editable && (
+          <button
+            onClick={addMember}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-body-sm font-semibold text-on-primary hover:opacity-90 transition-opacity"
+          >
+            <span className="material-symbols-outlined text-[18px]">person_add</span>
+            Add Member
+          </button>
+        )}
       </div>
 
       {/* Stats */}
@@ -154,14 +198,15 @@ export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: Emplo
                   { key: 'name', label: 'Name' },
                   { key: 'status', label: 'Type' },
                   { key: 'primaryDepartment', label: 'Department' },
+                  { key: null, label: 'Role' },
                   { key: 'rosterStatus', label: 'Roster' },
-                  { key: null, label: 'Coverage' },
                   { key: 'seniority', label: 'Seniority' },
                   { key: null, label: 'Leader' },
                   { key: 'weeklyHours', label: 'Weekly Hrs' },
-                ] as { key: SortKey | null; label: string }[]).map(({ key, label }) => (
+                  { key: null, label: '' },
+                ] as { key: SortKey | null; label: string }[]).map(({ key, label }, idx) => (
                   <th
-                    key={label}
+                    key={label || `col-${idx}`}
                     className={`p-3 text-left text-label-bold uppercase text-on-surface-variant select-none ${key ? 'cursor-pointer hover:text-on-surface' : ''}`}
                     onClick={key ? () => toggleSort(key) : undefined}
                   >
@@ -173,61 +218,207 @@ export function EmployeesView({ roster, autoDeductLunch, onRosterChange }: Emplo
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="p-8 text-center text-on-surface-variant">No employees match your filters.</td>
+                  <td colSpan={9} className="p-8 text-center text-on-surface-variant">No employees match your filters.</td>
                 </tr>
               ) : filtered.map((p, i) => (
-                <tr
-                  key={p.id}
-                  className={`border-b border-outline-variant/20 transition-colors hover:bg-surface-container-low ${i % 2 === 0 ? '' : 'bg-surface-container-lowest'}`}
-                >
-                  <td className="p-3 font-semibold text-on-surface">{p.name || '—'}</td>
-                  <td className="p-3">
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-label-bold ${p.status === 'FT' ? 'bg-primary/10 text-primary' : 'bg-secondary/10 text-secondary'}`}>
-                      {p.status}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    <span className="text-on-surface-variant text-body-sm font-medium">{p.primaryDepartment || 'Unassigned'}</span>
-                  </td>
-                  <td className="p-3">
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-label-bold ${
-                      p.rosterStatus === 'Active' ? 'bg-status-opener-bg text-status-opener-text'
-                      : p.rosterStatus === 'Starts Next Week' ? 'bg-primary/10 text-primary'
-                      : 'bg-surface-container text-on-surface-variant'
-                    }`}>
-                      {p.rosterStatus}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-label-bold ${p.coverageStatus === 'Excluded' ? 'bg-surface-container text-on-surface-variant' : 'bg-status-opener-bg text-status-opener-text'}`}>
-                      {p.coverageStatus ?? 'Included'}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    <input
-                      type="date"
-                      value={p.seniorityDate || ''}
-                      onChange={e => patchMember(p.id, { seniorityDate: e.target.value || undefined })}
-                      disabled={!onRosterChange}
-                      className="bg-surface-container-low border border-outline-variant/30 rounded-md px-2 py-1 text-body-sm text-on-surface focus:ring-2 focus:ring-primary/20 focus:border-primary/50 outline-none disabled:opacity-60"
-                    />
-                  </td>
-                  <td className="p-3">
-                    <button
-                      type="button"
-                      onClick={() => onRosterChange && patchMember(p.id, { isTeamLeader: !p.isTeamLeader })}
-                      disabled={!onRosterChange}
-                      title={p.isTeamLeader ? 'Team leader (seniority not used for cuts)' : 'Mark as team leader'}
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-label-bold transition-colors ${p.isTeamLeader ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'}`}
-                    >
-                      <span className="material-symbols-outlined text-[14px]">{p.isTeamLeader ? 'star' : 'star_outline'}</span>
-                      {p.isTeamLeader ? 'Leader' : '—'}
-                    </button>
-                  </td>
-                  <td className="p-3 font-data-tabular tabular-nums font-bold text-on-surface">
-                    {p.weeklyHours > 0 ? `${p.weeklyHours.toFixed(1)}h` : <span className="text-on-surface-variant font-normal">—</span>}
-                  </td>
-                </tr>
+                <Fragment key={p.id}>
+                  <tr
+                    className={`border-b border-outline-variant/20 transition-colors hover:bg-surface-container-low ${i % 2 === 0 ? '' : 'bg-surface-container-lowest'} ${expandedId === p.id ? 'bg-primary/5' : ''}`}
+                  >
+                    <td className="p-3 font-semibold text-on-surface">{p.name || <span className="text-on-surface-variant font-normal italic">Unnamed</span>}</td>
+                    <td className="p-3">
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-label-bold ${p.status === 'FT' ? 'bg-primary/10 text-primary' : 'bg-secondary/10 text-secondary'}`}>
+                        {p.status}
+                      </span>
+                    </td>
+                    <td className="p-3">
+                      <span className="text-on-surface-variant text-body-sm font-medium">{p.primaryDepartment || 'Unassigned'}</span>
+                    </td>
+                    <td className="p-3">
+                      <span className="text-on-surface-variant text-body-sm">{p.role || '—'}</span>
+                    </td>
+                    <td className="p-3">
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-label-bold ${
+                        p.rosterStatus === 'Active' ? 'bg-status-opener-bg text-status-opener-text'
+                        : p.rosterStatus === 'Starts Next Week' ? 'bg-primary/10 text-primary'
+                        : 'bg-surface-container text-on-surface-variant'
+                      }`}>
+                        {p.rosterStatus}
+                      </span>
+                    </td>
+                    <td className="p-3 font-data-tabular tabular-nums text-on-surface-variant text-body-sm">
+                      {p.seniorityDate || '—'}
+                    </td>
+                    <td className="p-3">
+                      {p.isTeamLeader ? (
+                        <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-label-bold bg-primary text-on-primary">
+                          <span className="material-symbols-outlined text-[14px]">star</span>Leader
+                        </span>
+                      ) : (
+                        <span className="text-on-surface-variant">—</span>
+                      )}
+                    </td>
+                    <td className="p-3 font-data-tabular tabular-nums font-bold text-on-surface">
+                      {p.weeklyHours > 0 ? `${p.weeklyHours.toFixed(1)}h` : <span className="text-on-surface-variant font-normal">—</span>}
+                    </td>
+                    <td className="p-3 whitespace-nowrap text-right">
+                      <button
+                        onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-body-sm font-semibold text-primary hover:bg-primary/10 transition-colors"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">{expandedId === p.id ? 'expand_less' : 'edit'}</span>
+                        {expandedId === p.id ? 'Close' : 'Edit'}
+                      </button>
+                      {editable && (
+                        <button
+                          onClick={() => removeMember(p)}
+                          title={`Remove ${p.name || 'team member'}`}
+                          className="ml-1 inline-flex items-center rounded-md px-2 py-1 text-body-sm font-semibold text-error hover:bg-error/10 transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">delete</span>
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                  {expandedId === p.id && (
+                    <tr className="border-b border-outline-variant/30 bg-surface-container-lowest">
+                      <td colSpan={9} className="p-5">
+                        {!editable && (
+                          <div className="mb-4 rounded-md bg-surface-container px-3 py-2 text-body-sm text-on-surface-variant">
+                            Editing is read-only here.
+                          </div>
+                        )}
+                        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
+                          <div>
+                            <label className={labelCls}>Name</label>
+                            <input className={fieldCls} value={p.name} disabled={!editable}
+                              onChange={e => patchMember(p.id, { name: e.target.value })} />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Employment</label>
+                            <select className={fieldCls} value={p.status} disabled={!editable}
+                              onChange={e => patchMember(p.id, { status: e.target.value as EmploymentStatus })}>
+                              <option value="FT">Full Time</option>
+                              <option value="PT">Part Time</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className={labelCls}>Department</label>
+                            <select className={fieldCls} value={p.primaryDepartment || 'Produce'} disabled={!editable}
+                              onChange={e => patchMember(p.id, { primaryDepartment: e.target.value })}>
+                              {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label className={labelCls}>Roster Status</label>
+                            <select className={fieldCls} value={p.rosterStatus} disabled={!editable}
+                              onChange={e => patchMember(p.id, { rosterStatus: e.target.value as RosterStatus })}>
+                              <option value="Active">Active</option>
+                              <option value="Starts Next Week">Starts Next Week</option>
+                              <option value="Inactive">Inactive</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className={labelCls}>Role / Position</label>
+                            <input className={fieldCls} value={p.role || ''} disabled={!editable}
+                              placeholder="e.g. Produce Stock"
+                              onChange={e => patchMember(p.id, { role: e.target.value || undefined })} />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Job Title</label>
+                            <input className={fieldCls} value={p.jobTitle || ''} disabled={!editable}
+                              placeholder="e.g. Team Leader"
+                              onChange={e => patchMember(p.id, { jobTitle: e.target.value || undefined })} />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Birthday</label>
+                            <input type="date" className={fieldCls} value={p.birthday || ''} disabled={!editable}
+                              onChange={e => patchMember(p.id, { birthday: e.target.value || undefined })} />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Seniority Date</label>
+                            <input type="date" className={fieldCls} value={p.seniorityDate || ''} disabled={!editable}
+                              onChange={e => patchMember(p.id, { seniorityDate: e.target.value || undefined })} />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Coverage</label>
+                            <select className={fieldCls} value={p.coverageStatus ?? 'Included'} disabled={!editable}
+                              onChange={e => patchMember(p.id, { coverageStatus: e.target.value as 'Included' | 'Excluded' })}>
+                              <option value="Included">Included</option>
+                              <option value="Excluded">Excluded</option>
+                            </select>
+                          </div>
+                          <div className="flex items-end">
+                            <button
+                              type="button"
+                              disabled={!editable}
+                              onClick={() => patchMember(p.id, { isTeamLeader: !p.isTeamLeader })}
+                              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-body-sm font-semibold transition-colors ${p.isTeamLeader ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface hover:bg-surface-container-high'} disabled:opacity-60`}
+                            >
+                              <span className="material-symbols-outlined text-[16px]">{p.isTeamLeader ? 'star' : 'star_outline'}</span>
+                              {p.isTeamLeader ? 'Team Leader' : 'Mark as Leader'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Time-off requests */}
+                        <div className="mt-5">
+                          <div className="flex items-center justify-between">
+                            <span className={labelCls}>Time-off Requests</span>
+                            {editable && (
+                              <button
+                                onClick={() => updateTimeOff(p, [...(p.timeOff || []), { date: '', type: 'Paid' }])}
+                                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-body-sm font-semibold text-primary hover:bg-primary/10"
+                              >
+                                <span className="material-symbols-outlined text-[16px]">add</span>Add request
+                              </button>
+                            )}
+                          </div>
+                          {(p.timeOff && p.timeOff.length > 0) ? (
+                            <div className="mt-2 space-y-2">
+                              {p.timeOff.map((req, idx) => (
+                                <div key={idx} className="flex flex-wrap items-center gap-2">
+                                  <input type="date" className={`${fieldCls} max-w-[170px]`} value={req.date} disabled={!editable}
+                                    onChange={e => updateTimeOff(p, p.timeOff!.map((r, j) => j === idx ? { ...r, date: e.target.value } : r))} />
+                                  <select className={`${fieldCls} max-w-[120px]`} value={req.type} disabled={!editable}
+                                    onChange={e => updateTimeOff(p, p.timeOff!.map((r, j) => j === idx ? { ...r, type: e.target.value as 'Paid' | 'Unpaid' } : r))}>
+                                    <option value="Paid">Paid</option>
+                                    <option value="Unpaid">Unpaid</option>
+                                  </select>
+                                  <input className={`${fieldCls} flex-1 min-w-[160px]`} value={req.note || ''} placeholder="Note (optional)" disabled={!editable}
+                                    onChange={e => updateTimeOff(p, p.timeOff!.map((r, j) => j === idx ? { ...r, note: e.target.value } : r))} />
+                                  {editable && (
+                                    <button
+                                      onClick={() => updateTimeOff(p, p.timeOff!.filter((_, j) => j !== idx))}
+                                      className="inline-flex items-center rounded-md px-2 py-1.5 text-error hover:bg-error/10"
+                                      title="Remove request"
+                                    >
+                                      <span className="material-symbols-outlined text-[16px]">close</span>
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-body-sm text-on-surface-variant">No time-off requests.</p>
+                          )}
+                        </div>
+
+                        {editable && (
+                          <div className="mt-5 flex justify-end">
+                            <button
+                              onClick={() => removeMember(p)}
+                              className="inline-flex items-center gap-1.5 rounded-md border border-error/40 px-3 py-2 text-body-sm font-semibold text-error hover:bg-error/10"
+                            >
+                              <span className="material-symbols-outlined text-[16px]">person_remove</span>
+                              Remove from team
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
