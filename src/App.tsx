@@ -148,6 +148,7 @@ function App() {
   const [isSaving, setIsSaving] = useState(false)
   const [isInitialLoading, setIsInitialLoading] = useState(true)
   const [lastSaved, setLastSaved] = useState<Date | null>(null)
+  const [saveScope, setSaveScope] = useState<'cloud' | 'local' | null>(null)
 
   // Load data when user, week, or department changes
   useEffect(() => {
@@ -263,8 +264,7 @@ function App() {
 
     const timer = setTimeout(async () => {
       setIsSaving(true)
-      // Save departmental week data
-      await saveAppState(currentDepartment, currentWeekId, {
+      const a = await saveAppState(currentDepartment, currentWeekId, {
         roster,
         targets,
         weeklyHoursAvailable,
@@ -272,10 +272,10 @@ function App() {
         autoDeductLunch,
         shiftDefinitions
       })
-      // Save global employee pool
-      await saveGlobalEmployees(globalEmployees)
+      const b = await saveGlobalEmployees(globalEmployees)
       setIsSaving(false)
       setLastSaved(new Date())
+      setSaveScope(a === 'cloud' && b === 'cloud' ? 'cloud' : 'local')
     }, 2000)
 
     return () => clearTimeout(timer)
@@ -286,15 +286,17 @@ function App() {
   // disturbing week-specific shifts.
   useEffect(() => {
     if (isInitialLoading) return
-    // Intentional guarded reconciliation: profile edits live on the global
-    // pool and must flow into the active week's roster without touching
-    // week-specific shifts. The updater returns `prev` unchanged when
-    // nothing differs, so this does not cascade renders.
+    // Propagate profile edits from the global pool into the active week's
+    // roster WITHOUT changing roster membership or week-specific shifts.
+    // Membership (adds/removes) is owned by the load/re-seed path and the
+    // Employees page — never delete here, or a transiently-empty pool
+    // (offline/Firebase down) would wipe the schedule.
+    if (globalEmployees.length === 0) return
+    const byId = new Map(globalEmployees.map(g => [g.id, g]))
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setRoster(prev => {
-      const byId = new Map(globalEmployees.map(g => [g.id, g]))
       let changed = false
-      let nextRoster = prev.map(r => {
+      const nextRoster = prev.map(r => {
         const g = byId.get(r.id)
         if (!g) return r
         const merged = { ...g, shifts: r.shifts, isBorrowed: r.isBorrowed }
@@ -304,20 +306,13 @@ function App() {
           merged.isTeamLeader !== r.isTeamLeader || merged.birthday !== r.birthday ||
           merged.primaryDepartment !== r.primaryDepartment || merged.rosterStatus !== r.rosterStatus ||
           merged.scheduleLocked !== r.scheduleLocked ||
+          merged.minHours !== r.minHours || merged.maxHours !== r.maxHours ||
           JSON.stringify(merged.unavailable) !== JSON.stringify(r.unavailable) ||
           JSON.stringify(merged.preferredDaysOff) !== JSON.stringify(r.preferredDaysOff) ||
           JSON.stringify(merged.timeOff) !== JSON.stringify(r.timeOff)
         if (fieldsDiffer) { changed = true; return merged }
         return r
       })
-      const beforeLen = nextRoster.length
-      nextRoster = nextRoster.filter(r => byId.has(r.id) || r.isBorrowed)
-      if (nextRoster.length !== beforeLen) changed = true
-      const present = new Set(nextRoster.map(r => r.id))
-      const additions = globalEmployees
-        .filter(g => !present.has(g.id) && g.primaryDepartment === currentDepartment && g.rosterStatus !== 'Inactive')
-        .map(g => ({ ...g, shifts: emptyShifts(), isBorrowed: false }))
-      if (additions.length) { nextRoster = [...nextRoster, ...additions]; changed = true }
       if (!changed) return prev
       return [...nextRoster].sort(compareSeniority)
     })
@@ -326,12 +321,13 @@ function App() {
   const forceSave = useCallback(async () => {
     if (!user) return
     setIsSaving(true)
-    await saveAppState(currentDepartment, currentWeekId, {
+    const a = await saveAppState(currentDepartment, currentWeekId, {
       roster, targets, weeklyHoursAvailable, minimumShiftLength, autoDeductLunch, shiftDefinitions
     })
-    await saveGlobalEmployees(globalEmployees)
+    const b = await saveGlobalEmployees(globalEmployees)
     setIsSaving(false)
     setLastSaved(new Date())
+    setSaveScope(a === 'cloud' && b === 'cloud' ? 'cloud' : 'local')
   }, [user, currentDepartment, currentWeekId, roster, targets, weeklyHoursAvailable, minimumShiftLength, autoDeductLunch, shiftDefinitions, globalEmployees])
 
   const handleSignOut = useCallback(async () => {
@@ -382,6 +378,7 @@ function App() {
             isLoading={isInitialLoading}
             isSaving={isSaving}
             lastSaved={lastSaved}
+            saveScope={saveScope}
             onForceSave={forceSave}
             onRosterChange={setRoster}
             onGlobalEmployeesChange={setGlobalEmployees}

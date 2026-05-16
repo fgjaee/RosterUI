@@ -9,11 +9,12 @@ import { days, parseShift, roleFor, checkAvailabilityViolation, toNumber } from 
  * to swap in an LLM later.
  *
  * Rules:
- *  - Availability is a HARD constraint. Existing shifts that violate it are
- *    cleared; nothing is ever assigned outside availability.
+ *  - Availability is a HARD constraint for anything we add. Existing
+ *    conflicts are cleared for flexible part-timers; full-timers and locked
+ *    people are left as-is and flagged (never silently deleted).
  *  - Morning (openers) is filled first — the floor must be stocked by 9am.
- *  - Full-timers are never trimmed and capped at 5 days / 40h; part-timers
- *    capped at 6 days / 40h.
+ *  - Full-timers are never trimmed; per-person min/max weekly hours are
+ *    respected (default cap 40h, FT 5 days / PT 6 days).
  *  - Seniority gets first chance at extra hours; juniors lose preferred
  *    days off before seniors; no senior ends with fewer hours than a junior
  *    they could have covered for (availability permitting).
@@ -57,7 +58,11 @@ const isFullTime = (p: TeamMember) => p.status === 'FT';
 const isFlexible = (p: TeamMember) =>
   !p.scheduleLocked && p.rosterStatus !== 'Inactive' && p.coverageStatus !== 'Excluded';
 const maxDaysFor = (p: TeamMember) => (isFullTime(p) ? 5 : 6);
-const MAX_HOURS = 40;
+const DEFAULT_MAX_HOURS = 40;
+const maxHoursFor = (p: TeamMember) =>
+  typeof p.maxHours === 'number' && p.maxHours > 0 ? p.maxHours : DEFAULT_MAX_HOURS;
+const minHoursFor = (p: TeamMember) =>
+  typeof p.minHours === 'number' && p.minHours > 0 ? p.minHours : 0;
 
 function seniorityValue(p: TeamMember): number {
   if (p.isTeamLeader || !p.seniorityDate) return Number.POSITIVE_INFINITY;
@@ -171,8 +176,8 @@ export function reviseSchedule(args: ReviseScheduleArgs): RevisionResult {
       if (!shift || !shift.trim()) continue;
       const chk = checkAvailabilityViolation(shift, p.unavailable[d] || '');
       if (chk.isViolation || chk.isHardBlock) {
-        if (p.scheduleLocked) {
-          notes.push(`${p.name}: locked shift on ${days[d]} conflicts with availability (${p.unavailable[d]}).`);
+        if (p.scheduleLocked || isFullTime(p)) {
+          notes.push(`${p.name}: ${days[d]} ${shift} conflicts with availability (${p.unavailable[d]}) — left as-is (${isFullTime(p) ? 'full-timer protected' : 'locked'}); resolve manually.`);
         } else {
           record(p, d, shift, '', `Clears availability conflict on ${days[d]}`, 'remove');
           p.shifts[d] = '';
@@ -197,7 +202,7 @@ export function reviseSchedule(args: ReviseScheduleArgs): RevisionResult {
           availableFor(p, d, std) &&
           roleFor(p.coverageStatus, std, defs) === role &&
           daysWorked(p) < maxDaysFor(p) &&
-          weeklyHoursOf(p, autoDeductLunch) + stdHrs <= MAX_HOURS
+          weeklyHoursOf(p, autoDeductLunch) + stdHrs <= maxHoursFor(p)
         );
         pool.sort(makeAssignComparator(d, stdHrs, cap, autoDeductLunch));
         const pick = pool[0];
@@ -224,7 +229,7 @@ export function reviseSchedule(args: ReviseScheduleArgs): RevisionResult {
         availableFor(p, d, std) &&
         roleFor(p.coverageStatus, std, defs) === 'close' &&
         daysWorked(p) < maxDaysFor(p) &&
-        weeklyHoursOf(p, autoDeductLunch) + stdHrs <= MAX_HOURS
+        weeklyHoursOf(p, autoDeductLunch) + stdHrs <= maxHoursFor(p)
       );
       pool.sort(makeAssignComparator(d, stdHrs, cap, autoDeductLunch));
       const pick = pool[0];
@@ -254,12 +259,15 @@ export function reviseSchedule(args: ReviseScheduleArgs): RevisionResult {
             const role = roleFor(p.coverageStatus, p.shifts[d] || '', defs);
             return { p, role, hrs: shiftHours(p.shifts[d] || '', autoDeductLunch) };
           })
-          .filter(({ p, role }) => {
+          .filter(({ p, role, hrs }) => {
             if (role === 'open' || role === 'close' || role === 'overnight') {
               if (counts[role] <= need[role]) return false; // would break coverage
             }
             // Don't leave the team leader as the only closer.
             if (role === 'close' && cInfo.hasLeader && cInfo.nonLeader - (p.isTeamLeader ? 0 : 1) <= 0) return false;
+            // Don't cut someone below their required minimum hours.
+            const min = minHoursFor(p);
+            if (min > 0 && weeklyHoursOf(p, autoDeductLunch) - hrs < min) return false;
             return true;
           })
           .sort((a, b) => {
@@ -314,7 +322,7 @@ export function reviseSchedule(args: ReviseScheduleArgs): RevisionResult {
           if ((senior.shifts[d] || '').trim()) continue;
           if (!availableFor(senior, d, shift)) continue;
           if (daysWorked(senior) >= maxDaysFor(senior)) continue;
-          if (weeklyHoursOf(senior, autoDeductLunch) + shiftHours(shift, autoDeductLunch) > MAX_HOURS) continue;
+          if (weeklyHoursOf(senior, autoDeductLunch) + shiftHours(shift, autoDeductLunch) > maxHoursFor(senior)) continue;
           // Coverage counts are unchanged (same shift moves junior -> senior),
           // so the leader-sole-closer state cannot worsen.
           record(junior, d, shift, '', `Seniority: ${senior.name} has priority over ${junior.name} for hours`, 'remove');
@@ -327,6 +335,41 @@ export function reviseSchedule(args: ReviseScheduleArgs): RevisionResult {
         if (improved) break;
       }
       if (improved) break;
+    }
+  }
+
+  // PASS 5 — best-effort minimum-hours top-up. Honor each person's required
+  // minimum weekly hours by adding standard shifts on days they are free and
+  // available, within their day/hour caps. May exceed the labor budget — a
+  // hard people-constraint wins, but we flag it.
+  for (const p of roster) {
+    if (!isFlexible(p)) continue;
+    const min = minHoursFor(p);
+    if (min <= 0) continue;
+    let guard = 0;
+    while (weeklyHoursOf(p, autoDeductLunch) < min && guard < 14) {
+      guard++;
+      // Prefer the role that currently helps coverage most, openers first.
+      let best: { d: number; std: string } | null = null;
+      for (let d = 0; d < 7; d++) {
+        if ((p.shifts[d] || '').trim()) continue;
+        if (daysWorked(p) >= maxDaysFor(p)) break;
+        for (const role of ['open', 'close', 'overnight'] as const) {
+          const std = STANDARD_SHIFT[role];
+          if (!availableFor(p, d, std)) continue;
+          if (roleFor(p.coverageStatus, std, defs) !== role) continue;
+          if (weeklyHoursOf(p, autoDeductLunch) + shiftHours(std, autoDeductLunch) > maxHoursFor(p)) continue;
+          best = { d, std };
+          break;
+        }
+        if (best) break;
+      }
+      if (!best) {
+        notes.push(`${p.name}: could not reach the ${min}h minimum (limited by availability or day/hour caps).`);
+        break;
+      }
+      record(p, best.d, '', best.std, `Meet ${p.name}'s ${min}h weekly minimum`, 'add');
+      p.shifts[best.d] = best.std;
     }
   }
 

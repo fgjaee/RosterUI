@@ -31,6 +31,10 @@ export type TeamMember = {
   // Soft preference (Sun..Sat). Not a hard block — the scheduler tries to
   // honor it but may override when coverage requires it.
   preferredDaysOff?: boolean[];
+  // Per-person weekly hour bounds the scheduler must respect. Undefined
+  // falls back to status defaults (e.g. FT 40h cap).
+  minHours?: number;
+  maxHours?: number;
 };
 
 export type WeekConfig = {
